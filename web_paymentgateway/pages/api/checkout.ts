@@ -1,9 +1,7 @@
-// pages/api/checkout.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { dbConnect } from '../../lib/mongodb';
-import OrderModel from '../../models/order';
+import { dbConnect } from '@/lib/mongodb';
+import OrderModel from '@/models/order';
 
-// Definisikan tipe body sesuai schema kamu
 type CheckoutItem = {
   productId: string;
   name: string;
@@ -65,7 +63,7 @@ export default async function handler(
       payment: { provider: 'xendit', status: 'PENDING' },
     });
 
-    // 2) Buat invoice Xendit (Test Mode karena pakai test secret key)
+    // 2) Buat invoice Xendit (Test Mode)
     const callback_url = `${process.env.APP_URL}/api/xendit/webhook`;
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
@@ -100,7 +98,7 @@ export default async function handler(
     }
     const invoice: XenditInvoiceResp = await resp.json();
 
-    // 3) ✅ Atomic update (menghindari error "possibly null/undefined")
+    // 3) Atomic update
     await OrderModel.updateOne(
       { _id: order._id },
       {
@@ -108,14 +106,12 @@ export default async function handler(
           'payment.providerRef': invoice.id,
           'payment.invoiceUrl': invoice.invoice_url,
           'payment.channel': invoice.payment_method ?? '',
-          // memastikan tetap konsisten
           'payment.provider': 'xendit',
           'payment.status': 'PENDING',
         },
       }
     );
 
-    // 4) Response ke frontend
     return res.status(200).json({
       orderId: order._id,
       invoiceId: invoice.id,
