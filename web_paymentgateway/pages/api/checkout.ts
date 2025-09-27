@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { dbConnect } from '@/lib/mongodb';
-import OrderModel from '@/models/order';
+import OrderModel from '@/models/Order';
 
 type CheckoutItem = {
   productId: string;
