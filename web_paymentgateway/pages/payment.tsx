@@ -1,8 +1,79 @@
 import Link from 'next/link';
+import React, { useRef } from 'react';
 import { useCart } from '@/context/CartContext';
+
+function useOrderSubmit(subtotal: number, tax: number, total: number, items: any[]) {
+  const shipping = subtotal > 0 ? 12_000 : 0; // contoh ongkir
+
+  const buildPayload = (form: HTMLFormElement | null) => {
+    const fd = form ? new FormData(form) : new FormData();
+    return {
+      customer: {
+        name: String(fd.get('name') || ''),
+        phone: String(fd.get('phone') || ''),
+        address: String(fd.get('address') || ''),
+        city: String(fd.get('city') || ''),
+        postalCode: String(fd.get('postalCode') || ''),
+      },
+      items: items.map((ci: any) => ({
+        productId: ci.product.id,
+        name: ci.product.name,
+        price: ci.product.price,
+        qty: ci.qty,
+        lineTotal: ci.product.price * ci.qty,
+      })),
+      amounts: { subtotal, tax, shipping, total: total + shipping },
+      provider: 'manual', // nanti ganti 'midtrans'/'xendit' saat integrasi gateway
+    };
+  };
+
+  // === versi submit dengan parsing aman ===
+  const submit = async (formEl: HTMLFormElement | null) => {
+    const payload = buildPayload(formEl);
+
+    const res = await fetch('/api/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    // baca dulu sebagai text (bisa JSON atau HTML error)
+    const text = await res.text();
+    let data: any = null;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      // server mengirim HTML (mis. 404/500 dari Next)
+      throw new Error(
+        `Gagal parse JSON. Status ${res.status}. Body: ${text.slice(0, 120)}...`
+      );
+    }
+
+    if (!res.ok) {
+      throw new Error(data?.message || `Gagal: HTTP ${res.status}`);
+    }
+
+    return data as { orderId: string; status: string };
+  };
+
+  return { submit, shipping };
+}
 
 export default function Checkout() {
   const { items, inc, dec, subtotal, tax, total, formatRupiah } = useCart();
+  const formRef = useRef<HTMLFormElement>(null);
+  const { submit, shipping } = useOrderSubmit(subtotal, tax, total, items);
+  const grand = total + shipping;
+
+  async function handleConfirmPay() {
+    try {
+      const { orderId } = await submit(formRef.current);
+      alert(`Order berhasil dibuat: ${orderId}`);
+      // window.location.href = '/payment'; // jika ingin redirect
+    } catch (e: any) {
+      alert(e.message || 'Gagal membuat order');
+    }
+  }
 
   return (
     <main className="mx-auto max-w-7xl p-8">
@@ -61,7 +132,7 @@ export default function Checkout() {
           )}
         </div>
 
-        {/* ===== KANAN: Ringkasan (sticky, rapat) ===== */}
+        {/* ===== KANAN: Ringkasan + Form Alamat + Confirm ===== */}
         <aside className="h-max rounded-2xl border p-4 shadow-sm md:sticky md:top-6">
           <h3 className="mb-3 text-base font-semibold">Ringkasan Belanja</h3>
           <div className="space-y-2 text-sm">
@@ -73,17 +144,45 @@ export default function Checkout() {
               <span>PPN (11%)</span>
               <span>{formatRupiah(tax)}</span>
             </div>
+            <div className="flex justify-between">
+              <span>Shipping</span>
+              <span>{formatRupiah(shipping)}</span>
+            </div>
             <div className="flex justify-between text-base font-semibold">
               <span>Total</span>
-              <span>{formatRupiah(total)}</span>
+              <span>{formatRupiah(grand)}</span>
             </div>
           </div>
 
-          <Link href="/payment" className="mt-4 block">
-            <button className="w-full rounded-xl bg-black py-3 text-white">
-              Lanjut ke Pembayaran →
-            </button>
-          </Link>
+          {/* Form alamat ringkas */}
+          <h4 className="mt-5 mb-2 text-sm font-semibold">Alamat Pengiriman</h4>
+          <form ref={formRef} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Nama Penerima</label>
+              <input name="name" className="input" placeholder="John Doe" />
+            </div>
+            <div>
+              <label className="label">Telepon</label>
+              <input name="phone" className="input" placeholder="08xxxxxxxxxx" />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label">Alamat</label>
+              <input name="address" className="input" placeholder="Jl. Contoh No. 123" />
+            </div>
+            <div>
+              <label className="label">Kota</label>
+              <input name="city" className="input" placeholder="Jakarta" />
+            </div>
+            <div>
+              <label className="label">Kode Pos</label>
+              <input name="postalCode" className="input" placeholder="12345" />
+            </div>
+          </form>
+
+          {/* Tombol aksi */}
+          <button onClick={handleConfirmPay} className="mt-4 w-full rounded-xl bg-black py-3 text-white">
+            Confirm &amp; Pay
+          </button>
         </aside>
       </section>
     </main>
