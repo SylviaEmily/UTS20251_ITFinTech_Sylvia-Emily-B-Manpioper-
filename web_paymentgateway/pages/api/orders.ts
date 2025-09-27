@@ -84,7 +84,7 @@ export default async function handler(
     const total = toNum(body.amounts?.total, subtotal + tax + shipping);
     if (total <= 0) return res.status(400).json({ message: 'Total must be > 0' });
 
-    // ----- build order data (POJO, TIDAK diketik sebagai OrderBase) -----
+    // ----- build order data (POJO) -----
     const data = {
       customer: {
         name: toStr(body.customer?.name),
@@ -121,7 +121,8 @@ export default async function handler(
       const inv: XenditInvoice = await xenditService.createInvoice({
         externalID: `ORDER-${order._id}`,
         amount: total,
-        payerEmail: toStr(body.customer?.email),
+        // ✅ KUNCI PERBAIKAN: jangan kirim string kosong
+        payerEmail: toStr(body.customer?.email) || undefined,
         description: `Payment for order ${order._id}`,
         successRedirectURL: `${process.env.APP_URL}/thankyou/${order._id}`,
         failureRedirectURL: `${process.env.APP_URL}/payment?failed=1`,
