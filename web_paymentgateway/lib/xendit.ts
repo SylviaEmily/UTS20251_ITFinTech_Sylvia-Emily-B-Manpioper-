@@ -1,7 +1,5 @@
-// lib/xendit.ts - DENGAN CONVERSION CAMELCASE → UNDERSCORE
-
+// lib/xendit.ts - FIXED VERSION
 export interface XenditInvoiceRequest {
-  // CAMELCASE untuk TypeScript interface
   externalID: string;
   amount: number;
   payerEmail?: string;
@@ -18,15 +16,20 @@ export interface XenditInvoiceRequest {
 
 export interface XenditInvoiceResponse {
   id: string;
-  external_id: string;        // underscore untuk response (sesuai Xendit)
+  external_id: string;
   status: 'PENDING' | 'PAID' | 'EXPIRED' | 'FAILED';
   amount: number;
-  payer_email: string;        // underscore
+  payer_email: string;
   description: string;
-  invoice_url: string;        // underscore
-  expiry_date: string;        // underscore
+  invoice_url: string;
+  expiry_date: string;
   created: string;
   updated: string;
+}
+
+export interface XenditError {
+  message: string;
+  code?: string;
 }
 
 export class XenditService {
@@ -45,14 +48,14 @@ export class XenditService {
 
   async createInvoice(data: XenditInvoiceRequest): Promise<XenditInvoiceResponse> {
     try {
-      // CONVERT camelCase to underscore untuk Xendit API
+      // Convert camelCase to underscore untuk Xendit API
       const apiData = {
-        external_id: data.externalID,           // camelCase → underscore
+        external_id: data.externalID,
         amount: data.amount,
-        payer_email: data.payerEmail,           // camelCase → underscore
+        payer_email: data.payerEmail,
         description: data.description,
-        success_redirect_url: data.successRedirectURL,  // camelCase → underscore
-        failure_redirect_url: data.failureRedirectURL,  // camelCase → underscore
+        success_redirect_url: data.successRedirectURL,
+        failure_redirect_url: data.failureRedirectURL,
         currency: data.currency || 'IDR',
         items: data.items || [],
       };
@@ -69,18 +72,20 @@ export class XenditService {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData: unknown = await response.json();
+        const errorMessage = this.getErrorMessage(errorData);
         console.error('Xendit API error:', errorData);
-        throw new Error(errorData.message || `Xendit API error: ${response.status}`);
+        throw new Error(errorMessage || `Xendit API error: ${response.status}`);
       }
 
-      const result = await response.json();
+      const result: XenditInvoiceResponse = await response.json();
       console.log('Xendit response:', result);
       return result;
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Xendit createInvoice error:', error);
-      throw new Error(`Failed to create Xendit invoice: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      throw new Error(`Failed to create Xendit invoice: ${errorMessage}`);
     }
   }
 
@@ -96,11 +101,25 @@ export class XenditService {
         throw new Error(`Xendit API error: ${response.status}`);
       }
 
-      return await response.json();
-    } catch (error: any) {
+      const result: XenditInvoiceResponse = await response.json();
+      return result;
+    } catch (error: unknown) {
       console.error('Xendit getInvoice error:', error);
-      throw new Error(`Failed to get Xendit invoice: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      throw new Error(`Failed to get Xendit invoice: ${errorMessage}`);
     }
+  }
+
+  private getErrorMessage(errorData: unknown): string {
+    if (typeof errorData === 'object' && errorData !== null) {
+      if ('message' in errorData && typeof errorData.message === 'string') {
+        return errorData.message;
+      }
+      if ('error' in errorData && typeof errorData.error === 'string') {
+        return errorData.error;
+      }
+    }
+    return 'Unknown Xendit error';
   }
 }
 

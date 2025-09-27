@@ -1,126 +1,176 @@
+// pages/api/checkout.ts - FIXED VERSION
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { dbConnect } from '@/lib/mongodb';
-import OrderModel from '@/models/Order';
+import OrderModel, { type OrderBase } from '@/models/Order';
+import { xenditService } from '@/lib/xendit';
 
-type CheckoutItem = {
+interface CheckoutItem {
   productId: string;
   name: string;
   price: number;
   qty: number;
-  lineTotal: number;
-};
+  imageUrl?: string;
+}
 
-type CheckoutAmounts = {
-  subtotal: number;
-  tax: number;
-  shipping?: number;
-  total: number;
-  currency?: string;
-};
-
-type CheckoutCustomer = {
-  name?: string;
-  phone?: string;
-  address?: string;
-  city?: string;
-  postalCode?: string;
-  email?: string;
-};
-
-type CheckoutBody = {
-  customer?: CheckoutCustomer;
+interface CheckoutRequest {
+  customer: {
+    name: string;
+    phone: string;
+    email: string;
+    address: string;
+    city: string;
+    postalCode: string;
+  };
   items: CheckoutItem[];
-  amounts: CheckoutAmounts;
-};
+  amounts: {
+    subtotal?: number;
+    tax?: number;
+    shipping?: number;
+    total?: number;
+    currency?: string;
+  };
+  notes?: string;
+}
 
-const XENDIT_BASE = 'https://api.xendit.co/v2/invoices';
+interface CheckoutResponse {
+  success: boolean;
+  orderId?: string;
+  invoiceUrl?: string;
+  invoiceId?: string;
+  amount?: number;
+  status?: string;
+  message?: string;
+  needsManualPayment?: boolean;
+}
+
+interface ErrorResponse {
+  message: string;
+  error?: string;
+}
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse
+  res: NextApiResponse<CheckoutResponse | ErrorResponse>
 ) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({ message: 'Method not allowed' });
   }
 
   try {
-    const { customer, items, amounts } = req.body as CheckoutBody;
-
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: 'items is required and must be non-empty' });
-    }
-    if (!amounts?.total) {
-      return res.status(400).json({ error: 'amounts.total is required' });
-    }
-
     await dbConnect();
+    const body: CheckoutRequest = req.body;
 
-    // 1) Buat order lokal
-    const order = await OrderModel.create({
-      customer,
+    // Validate required fields
+    if (!body.customer?.email || !body.items || body.items.length === 0) {
+      return res.status(400).json({ 
+        message: 'Missing required fields: customer email and items are required' 
+      });
+    }
+
+    // Calculate amounts
+    const items = body.items.map(item => ({
+      ...item,
+      lineTotal: item.price * item.qty,
+    }));
+
+    const subtotal = items.reduce((sum, item) => sum + item.lineTotal, 0);
+    const tax = body.amounts?.tax || 0;
+    const shipping = body.amounts?.shipping || 0;
+    const total = body.amounts?.total || (subtotal + tax + shipping);
+
+    if (total <= 0) {
+      return res.status(400).json({ message: 'Total amount must be greater than 0' });
+    }
+
+    // Create order in database
+    const orderData: OrderBase = {
+      customer: {
+        name: body.customer.name,
+        phone: body.customer.phone,
+        email: body.customer.email,
+        address: body.customer.address,
+        city: body.customer.city,
+        postalCode: body.customer.postalCode,
+      },
       items,
-      amounts,
-      payment: { provider: 'xendit', status: 'PENDING' },
-    });
-
-    // 2) Buat invoice Xendit (Test Mode)
-    const callback_url = `${process.env.APP_URL}/api/xendit/webhook`;
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-      Authorization:
-        'Basic ' + Buffer.from(`${process.env.XENDIT_SECRET_KEY}:`).toString('base64'),
+      amounts: {
+        subtotal,
+        tax,
+        shipping,
+        total,
+        currency: body.amounts?.currency || 'IDR',
+      },
+      payment: {
+        provider: 'xendit',
+        status: 'PENDING',
+        providerRef: '',
+        invoiceUrl: '',
+        channel: '',
+        failureReason: '',
+      },
+      notes: body.notes,
+      createdAt: new Date(),
+      updatedAt: new Date(),
     };
 
-    const resp = await fetch(XENDIT_BASE, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        external_id: order._id.toString(),
-        amount: amounts.total,
-        currency: amounts.currency ?? 'IDR',
-        payer_email: customer?.email || undefined,
-        description: `Order #${order._id}`,
-        success_redirect_url: `${process.env.APP_URL}/payment/success?ref=${order._id}`,
-        failure_redirect_url: `${process.env.APP_URL}/payment/failed?ref=${order._id}`,
-        callback_url,
-      }),
-    });
+    const order = await OrderModel.create(orderData);
 
-    if (!resp.ok) {
-      const errText = await resp.text();
-      return res.status(resp.status).json({ error: `Xendit error: ${errText}` });
+    try {
+      // Create Xendit invoice
+      const xenditInvoice = await xenditService.createInvoice({
+        externalID: `ORDER-${order._id}`,
+        amount: total,
+        payerEmail: body.customer.email,
+        description: `Payment for order ${order._id}`,
+        successRedirectURL: `${process.env.APP_URL}/orders/${order._id}/success`,
+        failureRedirectURL: `${process.env.APP_URL}/orders/${order._id}/failed`,
+        currency: 'IDR',
+        items: items.map(item => ({
+          name: item.name,
+          quantity: item.qty,
+          price: item.price,
+        })),
+      });
+
+      // Update order with Xendit invoice details
+      order.payment.providerRef = xenditInvoice.id;
+      order.payment.invoiceUrl = xenditInvoice.invoice_url;
+      order.payment.status = 'PENDING';
+      await order.save();
+
+      return res.status(201).json({
+        success: true,
+        orderId: order._id.toString(),
+        invoiceUrl: xenditInvoice.invoice_url,
+        invoiceId: xenditInvoice.id,
+        amount: total,
+        status: 'PENDING',
+      });
+
+    } catch (xenditError: unknown) {
+      // Xendit failed, but order is saved
+      const errorMessage = xenditError instanceof Error ? xenditError.message : 'Xendit service unavailable';
+      
+      order.payment.status = 'FAILED';
+      order.payment.failureReason = errorMessage;
+      await order.save();
+
+      return res.status(201).json({
+        success: true,
+        orderId: order._id.toString(),
+        message: 'Order created but payment initialization failed. Please contact support.',
+        status: 'FAILED',
+        needsManualPayment: true,
+      });
     }
 
-    interface XenditInvoiceResp {
-      id: string;
-      invoice_url: string;
-      payment_method?: string | null;
-    }
-    const invoice: XenditInvoiceResp = await resp.json();
-
-    // 3) Atomic update
-    await OrderModel.updateOne(
-      { _id: order._id },
-      {
-        $set: {
-          'payment.providerRef': invoice.id,
-          'payment.invoiceUrl': invoice.invoice_url,
-          'payment.channel': invoice.payment_method ?? '',
-          'payment.provider': 'xendit',
-          'payment.status': 'PENDING',
-        },
-      }
-    );
-
-    return res.status(200).json({
-      orderId: order._id,
-      invoiceId: invoice.id,
-      checkoutUrl: invoice.invoice_url,
+  } catch (error: unknown) {
+    console.error('Checkout error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Internal server error';
+    
+    return res.status(500).json({ 
+      message: 'Internal server error',
+      error: errorMessage 
     });
-  } catch (e: unknown) {
-    const message =
-      e instanceof Error ? e.message : 'Unexpected error while creating invoice';
-    console.error('Checkout error:', e);
-    return res.status(500).json({ error: message });
   }
 }
