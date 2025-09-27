@@ -1,13 +1,14 @@
 // pages/api/orders.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { dbConnect } from "@/lib/mongodb";
-import OrderModel, { type OrderBase } from "@/models/order";
+import OrderModel/*, { type OrderBase }*/ from "@/models/order";
 
-// Helpers aman
+// Helpers
 const toStr = (v: unknown): string => (typeof v === "string" ? v : "");
 const toNum = (v: unknown, def = 0): number =>
   typeof v === "number" && Number.isFinite(v) ? v : def;
 
+// ====== TYPES INPUT (plain object, bukan Mongoose Document) ======
 type CreateOrderBody = {
   customer?: {
     name?: string | null;
@@ -17,13 +18,7 @@ type CreateOrderBody = {
     postalCode?: string | null;
     email?: string | null;
   };
-  items: Array<{
-    productId: string;
-    name: string;
-    price: number;
-    qty: number;
-    lineTotal?: number;
-  }>;
+  items: Array<{ productId: string; name: string; price: number; qty: number; lineTotal?: number }>;
   amounts?: {
     subtotal?: number | null;
     tax?: number | null;
@@ -33,6 +28,46 @@ type CreateOrderBody = {
   };
   provider?: "manual" | "xendit" | "midtrans" | "stripe";
 };
+
+type OrderItemInput = {
+  productId: string;
+  name: string;
+  price: number;
+  qty: number;
+  lineTotal: number;
+};
+
+type AmountsInput = {
+  subtotal: number;
+  tax: number;
+  shipping: number;
+  total: number;
+  currency: string; // ubah ke union kalau schema kamu membatasi
+};
+
+type PaymentInput = {
+  provider: "manual" | "xendit" | "midtrans" | "stripe";
+  status: "PENDING" | "PAID" | "FAILED" | "CANCELLED";
+  providerRef: string;
+  invoiceUrl: string;
+  channel: string;
+  failureReason: string;
+};
+
+type OrderCreateInput = {
+  customer: {
+    name: string;
+    phone: string;
+    address: string;
+    city: string;
+    postalCode: string;
+    email: string;
+  };
+  items: OrderItemInput[];
+  amounts: AmountsInput;
+  payment: PaymentInput;
+};
+// ================================================================
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
@@ -45,43 +80,38 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const body = (req.body || {}) as CreateOrderBody;
 
-    // ---- Items: plain array (bukan DocumentArray) ----
-    const itemsInput = (body.items ?? []).map((it) => ({
+    // Items -> plain array (bukan DocumentArray)
+    const items: OrderItemInput[] = (body.items ?? []).map((it) => ({
       productId: toStr(it.productId),
       name: toStr(it.name),
       price: toNum(it.price),
       qty: toNum(it.qty),
       lineTotal: toNum(it.lineTotal, toNum(it.price) * toNum(it.qty)),
-      // JANGAN tambahkan properti yang tidak ada di schema (mis. imageUrl)
     }));
-
-    if (itemsInput.length === 0) {
+    if (items.length === 0) {
       return res.status(400).json({ message: "Items cannot be empty" });
     }
 
-    // ---- Amounts: pastikan number valid & currency tidak kosong ----
-    const calcSubtotal = itemsInput.reduce((s, it) => s + toNum(it.lineTotal), 0);
+    // Amounts (safe numbers)
+    const calcSubtotal = items.reduce((s, it) => s + toNum(it.lineTotal), 0);
     const aSubtotal = toNum(body.amounts?.subtotal, calcSubtotal);
     const aTax = toNum(body.amounts?.tax, 0);
     const aShipping = toNum(body.amounts?.shipping, 0);
     const aTotal = toNum(body.amounts?.total, aSubtotal + aTax + aShipping);
     const aCurrency = toStr(body.amounts?.currency) || "IDR";
 
-    // NOTE: kalau di tipe kamu currency adalah union ('IDR'|'USD'|...), cast ke union:
-    type AmountsT = NonNullable<OrderBase["amounts"]>;
-    const amountsInput: AmountsT = {
+    const amounts: AmountsInput = {
       subtotal: aSubtotal,
       tax: aTax,
       shipping: aShipping,
       total: aTotal,
-      currency: aCurrency as AmountsT["currency"],
+      currency: aCurrency,
     };
 
     const provider = body.provider ?? "manual";
 
-    // ---- Bangun payload input polos (tanpa Document fields) ----
-    // IMPORTANT: cast ke 'any' saat dipassing ke Mongoose agar tidak konflik dengan Document types.
-    const orderData/*: Omit<OrderBase, "_id"|"createdAt"|"updatedAt">*/ = {
+    // Payload input ke Mongoose (plain JS object)
+    const orderData: OrderCreateInput = {
       customer: {
         name: toStr(body.customer?.name),
         phone: toStr(body.customer?.phone),
@@ -90,8 +120,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         postalCode: toStr(body.customer?.postalCode),
         email: toStr(body.customer?.email),
       },
-      items: itemsInput,
-      amounts: amountsInput,
+      items,
+      amounts,
       payment: {
         provider,
         status: "PENDING",
@@ -102,18 +132,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       },
     };
 
-    // >>> KUNCI ANTI-TS2740 <<<
-    // Mongoose akan meng-cast plain object ini ke subdocument yang sesuai.
-    const doc = await OrderModel.create(orderData as any);
+    // Mongoose akan cast otomatis ke subdocument yang sesuai
+    const doc = await OrderModel.create(orderData);
 
     return res.status(201).json({
       orderId: String(doc._id),
       status: doc.payment?.status ?? "PENDING",
     });
-  } catch (err: any) {
-    console.error("Create order error:", err?.response?.data || err?.message || err);
-    return res
-      .status(500)
-      .json({ message: err?.response?.data?.message || err?.message || "Internal Server Error" });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Internal Server Error";
+    console.error("Create order error:", msg);
+    return res.status(500).json({ message: msg });
   }
 }

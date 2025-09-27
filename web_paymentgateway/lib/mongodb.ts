@@ -1,19 +1,22 @@
-import mongoose from 'mongoose';
+// lib/mongodb.ts
+import mongoose from "mongoose";
 
 const MONGODB_URI = process.env.MONGODB_URI as string;
-if (!MONGODB_URI) throw new Error('Missing MONGODB_URI');
+if (!MONGODB_URI) throw new Error("ENV MONGODB_URI belum di-set");
 
-type Cache = { conn: typeof mongoose | null; promise: Promise<typeof mongoose> | null };
-
-const globalAny = global as unknown as { mongoose?: Cache };
-let cached: Cache = globalAny.mongoose ?? { conn: null, promise: null };
+// cache di global, biar tidak reinit di serverless
+type Cached = { conn: typeof mongoose | null; promise: Promise<typeof mongoose> | null };
+const g = global as unknown as { mongoose?: Cached };
+const cached: Cached = g.mongoose || { conn: null, promise: null };
+g.mongoose = cached;
 
 export async function dbConnect() {
   if (cached.conn) return cached.conn;
   if (!cached.promise) {
-    cached.promise = mongoose.connect(MONGODB_URI).then((m) => m);
+    cached.promise = mongoose
+      .connect(MONGODB_URI, { dbName: process.env.MONGODB_DB || undefined })
+      .then((m) => m);
   }
   cached.conn = await cached.promise;
-  globalAny.mongoose = cached;
   return cached.conn;
 }
