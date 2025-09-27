@@ -1,48 +1,59 @@
+// pages/api/orders.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { dbConnect } from '@/lib/mongodb';
-import Order from '@/models/Order'; // pastikan casing file = 'models/order.ts'
+import OrderModel, { type Order, type OrderBase, type OrderItem } from '@/models/Order';
+
+type CreateOrderPayload = {
+  customer: NonNullable<OrderBase['customer']>;
+  items: OrderItem[];
+  amounts: NonNullable<OrderBase['amounts']>;
+  /** client mengirim provider di root payload; server akan memetakan ke payment.provider */
+  provider?: 'manual' | 'midtrans' | 'xendit' | 'stripe';
+};
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') return res.status(405).json({ message: 'Method not allowed' });
-
   try {
     await dbConnect();
 
-    const { customer, items, amounts, provider = 'manual' } = req.body || {};
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ message: 'Items required' });
+    if (req.method === 'POST') {
+      const body = req.body as CreateOrderPayload;
+
+      // (opsional) validasi minimal
+      if (!body?.items?.length) {
+        return res.status(400).json({ message: 'Items kosong' });
+      }
+
+      const doc: Order = await OrderModel.create({
+        customer: body.customer,
+        items: body.items,
+        amounts: {
+          subtotal: body.amounts?.subtotal ?? 0,
+          tax: body.amounts?.tax ?? 0,
+          shipping: body.amounts?.shipping ?? 0,
+          total: body.amounts?.total ?? 0,
+          currency: body.amounts?.currency ?? 'IDR',
+        },
+        payment: {
+          provider: body.provider ?? 'manual',
+          status: 'PENDING',
+          providerRef: undefined,
+        },
+      } as OrderBase);
+
+      return res
+        .status(201)
+        .json({ orderId: doc._id.toString(), status: doc.payment?.status ?? 'PENDING' });
     }
 
-    const safeItems = items.map((it: any) => ({
-      productId: String(it.productId),
-      name: String(it.name),
-      price: Number(it.price),
-      qty: Number(it.qty),
-      lineTotal: Number(it.lineTotal),
-    }));
+    if (req.method === 'GET') {
+      const list = await OrderModel.find().sort({ createdAt: -1 }).lean();
+      return res.status(200).json(list);
+    }
 
-    const subtotal = Number(amounts?.subtotal ?? safeItems.reduce((s, it) => s + it.lineTotal, 0));
-    const tax      = Number(amounts?.tax ?? 0);
-    const shipping = Number(amounts?.shipping ?? 0);
-    const total    = Number(amounts?.total ?? subtotal + tax + shipping);
-
-    const order = await Order.create({
-      customer: {
-        name: customer?.name ?? '',
-        phone: customer?.phone ?? '',
-        address: customer?.address ?? '',
-        city: customer?.city ?? '',
-        postalCode: customer?.postalCode ?? '',
-      },
-      items: safeItems,
-      amounts: { subtotal, tax, shipping, total, currency: 'IDR' },
-      payment: { provider, status: 'PENDING' },
-    });
-
-    return res.status(201).json({ orderId: order._id, status: order.payment.status });
-  } catch (err: any) {
-    console.error('POST /api/orders error:', err);
-    // pastikan selalu JSON
-    return res.status(500).json({ message: err?.message || 'Internal error' });
+    res.setHeader('Allow', ['GET', 'POST']);
+    return res.status(405).json({ message: 'Method Not Allowed' });
+  } catch (err) {
+    console.error('API /orders error:', err);
+    return res.status(500).json({ message: 'Internal server error' });
   }
 }

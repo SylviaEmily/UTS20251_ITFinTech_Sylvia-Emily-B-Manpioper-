@@ -3,7 +3,7 @@ import Link from 'next/link';
 import React, { useRef, useState } from 'react';
 import { useCart } from '@/context/CartContext';
 
-/** ====== Types ====== */
+/** ===== Types ===== */
 type PayStatus = 'idle' | 'processing' | 'success' | 'error';
 
 type CartProduct = {
@@ -12,11 +12,7 @@ type CartProduct = {
   price: number;
   imageUrl?: string;
 };
-
-type CartItem = {
-  product: CartProduct;
-  qty: number;
-};
+type CartItem = { product: CartProduct; qty: number };
 
 type OrderItemPayload = {
   productId: string;
@@ -24,10 +20,8 @@ type OrderItemPayload = {
   price: number;
   qty: number;
   lineTotal: number;
-  /** Opsional: akan diabaikan oleh schema jika field ini tidak ada di model Order */
   imageUrl?: string;
 };
-
 type OrderPayload = {
   customer: {
     name: string;
@@ -41,28 +35,24 @@ type OrderPayload = {
     subtotal: number;
     tax: number;
     shipping: number;
-    total: number; // subtotal + tax + shipping
-    currency?: string; // di server default 'IDR'
+    total: number;
+    currency?: 'IDR';
   };
-  /** Catatan: schema Order kita menaruh provider di `payment.provider`.
-   *  Payload ini tetap kompatibel, server boleh memetakan ke sana.
-   */
   provider: 'manual' | 'midtrans' | 'xendit' | 'stripe';
 };
-
 type ApiOrderResponse = {
   orderId: string;
   status: 'PENDING' | 'PAID' | 'FAILED' | 'CANCELLED';
 };
 
-/** ====== Hook submit order (tanpa any) ====== */
+/** ===== Hook submit order (no any) ===== */
 function useOrderSubmit(
   subtotal: number,
   tax: number,
   total: number,
   items: CartItem[]
 ) {
-  const shipping = subtotal > 0 ? 12_000 : 0; // contoh ongkir
+  const shipping = subtotal > 0 ? 12_000 : 0;
 
   const buildPayload = (form: HTMLFormElement | null): OrderPayload => {
     const fd = form ? new FormData(form) : new FormData();
@@ -80,10 +70,10 @@ function useOrderSubmit(
         price: ci.product.price,
         qty: ci.qty,
         lineTotal: ci.product.price * ci.qty,
-        imageUrl: ci.product.imageUrl || undefined, // opsional snapshot
+        imageUrl: ci.product.imageUrl || undefined,
       })),
-      amounts: { subtotal, tax, shipping, total: total + shipping },
-      provider: 'manual', // ganti 'xendit' saat integrasi gateway
+      amounts: { subtotal, tax, shipping, total: total + shipping, currency: 'IDR' },
+      provider: 'manual',
     };
   };
 
@@ -112,7 +102,6 @@ function useOrderSubmit(
       throw new Error(msg);
     }
 
-    // validasi bentuk response minimum
     const dto = data as Partial<ApiOrderResponse>;
     if (!dto.orderId) throw new Error('Response tidak berisi orderId');
     return { orderId: dto.orderId, status: (dto.status ?? 'PENDING') as ApiOrderResponse['status'] };
@@ -121,7 +110,7 @@ function useOrderSubmit(
   return { submit, shipping };
 }
 
-/** ====== Page ====== */
+/** ===== Page ===== */
 export default function Payment() {
   const { items, inc, dec, subtotal, tax, total, formatRupiah } = useCart();
   const formRef = useRef<HTMLFormElement>(null);
@@ -136,9 +125,8 @@ export default function Payment() {
       const { orderId } = await submit(formRef.current);
       setStatus('success');
       alert(`Order berhasil dibuat: ${orderId}`);
-      // TODO: redirect ke halaman sukses/Invoice jika sudah ada
       // window.location.href = '/thankyou/' + orderId;
-    } catch (e: unknown) {
+    } catch (e) {
       setStatus('error');
       const msg = e instanceof Error ? e.message : 'Gagal membuat order';
       alert(msg);
@@ -154,7 +142,7 @@ export default function Payment() {
       </div>
 
       <section className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        {/* ===== KIRI: Daftar Item (dengan gambar) ===== */}
+        {/* ===== KIRI: Daftar Item ===== */}
         <div className="md:col-span-2 rounded-2xl border shadow-sm">
           {items.length === 0 ? (
             <div className="p-8 text-center">
@@ -169,7 +157,7 @@ export default function Payment() {
                     key={ci.product.id}
                     className="grid grid-cols-12 items-center gap-3 px-4 py-3"
                   >
-                    {/* thumbnail produk – tampil di semua ukuran */}
+                    {/* thumbnail */}
                     <div className="col-span-1">
                       <div className="h-10 w-10 overflow-hidden rounded bg-gray-200">
                         {ci.product.imageUrl ? (
@@ -223,7 +211,7 @@ export default function Payment() {
           )}
         </div>
 
-        {/* ===== KANAN: Ringkasan + Form Alamat + Confirm ===== */}
+        {/* ===== KANAN: Ringkasan + Form ===== */}
         <aside className="h-max rounded-2xl border p-4 shadow-sm md:sticky md:top-6">
           <h3 className="mb-3 text-base font-semibold">Ringkasan Belanja</h3>
           <div className="space-y-2 text-sm">
@@ -245,7 +233,6 @@ export default function Payment() {
             </div>
           </div>
 
-          {/* Form alamat ringkas */}
           <h4 className="mt-5 mb-2 text-sm font-semibold">Alamat Pengiriman</h4>
           <form ref={formRef} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
@@ -270,7 +257,6 @@ export default function Payment() {
             </div>
           </form>
 
-          {/* Tombol aksi */}
           <button
             onClick={handleConfirmPay}
             className="mt-4 w-full rounded-xl bg-black py-3 text-white"
