@@ -1,14 +1,34 @@
 // pages/thankyou/[id].tsx
-import { GetServerSideProps, InferGetServerSidePropsType } from 'next';
+import Link from 'next/link';
+import type { GetServerSideProps, InferGetServerSidePropsType } from 'next';
 import { dbConnect } from '@/lib/mongodb';
 import Order from '@/models/Order';
 
 type PaidStatus = 'PENDING' | 'PAID' | 'FAILED' | 'CANCELLED';
 
+type PaymentLean = {
+  status?: PaidStatus;
+  providerRef?: string;
+  invoiceUrl?: string;
+};
+
+type AmountsLean = {
+  total?: number;
+  currency?: 'IDR' | string;
+};
+
+// Tipe data minimal dokumen Order saat .lean()
+type OrderLean = {
+  _id: string;
+  payment?: PaymentLean;
+  amounts?: AmountsLean;
+};
+
+// DTO yang dipakai komponen
 type OrderDTO = {
   _id: string;
-  payment: { status: PaidStatus; providerRef?: string; invoiceUrl?: string };
-  amounts: { total: number; currency?: 'IDR' };
+  payment: { status: PaidStatus; providerRef: string; invoiceUrl: string };
+  amounts: { total: number; currency: 'IDR' | string };
 };
 
 export default function ThankYouPage(
@@ -18,7 +38,7 @@ export default function ThankYouPage(
 
   return (
     <main className="mx-auto max-w-2xl p-8">
-      <a href="/" className="text-sm opacity-70">← Back to Home</a>
+      <Link href="/" className="text-sm opacity-70">← Back to Home</Link>
       <h1 className="mt-2 text-xl font-semibold">Terima kasih!</h1>
 
       <section className="mt-4 rounded-xl border p-4">
@@ -43,8 +63,12 @@ export default function ThankYouPage(
       </section>
 
       <div className="mt-4 flex gap-2">
-        <a href={`/thankyou/${order._id}`} className="rounded border px-3 py-2 text-sm">Refresh Status</a>
-        <a href="/" className="rounded bg-black px-3 py-2 text-sm text-white">Kembali ke Beranda</a>
+        <Link href={`/thankyou/${order._id}`} className="rounded border px-3 py-2 text-sm">
+          Refresh Status
+        </Link>
+        <Link href="/" className="rounded bg-black px-3 py-2 text-sm text-white">
+          Kembali ke Beranda
+        </Link>
       </div>
     </main>
   );
@@ -57,25 +81,23 @@ export const getServerSideProps: GetServerSideProps<{
   await dbConnect();
 
   const id = String(params?.id || '');
-
-  // 🔧 Pastikan ambil SATU dokumen, BUKAN array:
+  // Ambil SATU dokumen + lean dgn tipe aman (tanpa any)
   const doc = await Order.findById(id)
-    .select('_id payment amounts') // ambil field yang perlu saja
-    .lean();
+    .select('_id payment amounts')
+    .lean<OrderLean | null>();
 
   if (!doc) return { notFound: true };
 
-  // Map ke DTO ringan (hindari tipe kompleks Mongoose di halaman)
   const order: OrderDTO = {
-    _id: String((doc as any)._id),
+    _id: String(doc._id),
     payment: {
-      status: (doc as any).payment?.status ?? 'PENDING',
-      providerRef: (doc as any).payment?.providerRef ?? '',
-      invoiceUrl: (doc as any).payment?.invoiceUrl ?? '',
+      status: doc.payment?.status ?? 'PENDING',
+      providerRef: doc.payment?.providerRef ?? '',
+      invoiceUrl: doc.payment?.invoiceUrl ?? '',
     },
     amounts: {
-      total: Number((doc as any).amounts?.total ?? 0),
-      currency: (doc as any).amounts?.currency ?? 'IDR',
+      total: typeof doc.amounts?.total === 'number' ? doc.amounts.total : 0,
+      currency: doc.amounts?.currency ?? 'IDR',
     },
   };
 
