@@ -1,114 +1,85 @@
 // pages/thankyou/[id].tsx
-import { GetServerSideProps } from 'next';
-import Link from 'next/link';
+import { GetServerSideProps, InferGetServerSidePropsType } from 'next';
 import { dbConnect } from '@/lib/mongodb';
-import OrderModel from '@/models/Order';
-import type { Types } from 'mongoose';
+import Order from '@/models/Order';
 
-type OrderDocLean = {
-  _id: Types.ObjectId | string;
-  payment?: { status?: 'PENDING' | 'PAID' | 'FAILED' | 'CANCELLED'; providerRef?: string };
-  amounts?: { total?: number; currency?: string };
-  customer?: { name?: string | null };
-};
+type PaidStatus = 'PENDING' | 'PAID' | 'FAILED' | 'CANCELLED';
 
 type OrderDTO = {
   _id: string;
-  payment: { status: 'PENDING' | 'PAID' | 'FAILED' | 'CANCELLED'; providerRef?: string };
-  amounts: { total: number; currency?: string };
-  customer?: { name?: string | null };
+  payment: { status: PaidStatus; providerRef?: string; invoiceUrl?: string };
+  amounts: { total: number; currency?: 'IDR' };
 };
 
-type Props = { order: OrderDTO };
-
-export default function ThankYou({ order }: Props) {
-  const isPaid = order.payment.status === 'PAID';
-  const isPending = order.payment.status === 'PENDING';
+export default function ThankYouPage(
+  { order, forcePaid }: InferGetServerSidePropsType<typeof getServerSideProps>
+) {
+  const uiStatus: PaidStatus = forcePaid ? 'PAID' : order.payment.status;
 
   return (
     <main className="mx-auto max-w-2xl p-8">
-      <div className="mb-6">
-        <Link href="/" className="text-sm opacity-70 hover:underline">
-          ← Back to Home
-        </Link>
-      </div>
+      <a href="/" className="text-sm opacity-70">← Back to Home</a>
+      <h1 className="mt-2 text-xl font-semibold">Terima kasih!</h1>
 
-      <h1 className="text-2xl font-semibold">
-        Terima kasih{order.customer?.name ? `, ${order.customer.name}` : ''}!
-      </h1>
-      <p className="mt-2 text-sm text-gray-600">
-        Order ID:{' '}
-        <code className="rounded bg-gray-100 px-1 py-0.5">{order._id}</code>
-      </p>
-
-      <div className="mt-4 rounded-2xl border p-4">
-        <p className="text-sm">Status pembayaran:</p>
-        <p
-          className={`mt-1 text-lg font-semibold ${
-            isPaid ? 'text-green-600' : isPending ? 'text-amber-600' : 'text-red-600'
-          }`}
-        >
-          {order.payment.status}
+      <section className="mt-4 rounded-xl border p-4">
+        <p className="text-sm">Order ID: <b>{order._id}</b></p>
+        <p className="mt-1 text-sm">
+          Status pembayaran: <b>{uiStatus}</b>
+          {forcePaid && (
+            <span className="ml-2 rounded bg-yellow-100 px-2 py-0.5 text-xs">
+              Simulated
+            </span>
+          )}
         </p>
-
-        {order.payment.providerRef ? (
-          <p className="mt-1 text-xs text-gray-500">
-            Invoice: {order.payment.providerRef}
+        <p className="mt-1 text-sm">
+          Total: <b>{order.amounts.total.toLocaleString('id-ID')} {order.amounts.currency || 'IDR'}</b>
+        </p>
+        {uiStatus !== 'PAID' && (
+          <p className="mt-3 text-xs text-amber-700 bg-amber-50 p-2 rounded">
+            Pembayaran menunggu webhook Xendit. Jika kamu baru saja membayar, status
+            <b> PAID</b> akan muncul setelah webhook diterima.
           </p>
-        ) : null}
-
-        <p className="mt-4">
-          Total: <b>{order.amounts.total.toLocaleString('id-ID')}</b>{' '}
-          <span className="text-gray-600">{order.amounts.currency ?? 'IDR'}</span>
-        </p>
-
-        {isPending && (
-          <div className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            Pembayaran masih menunggu. Jika kamu baru saja membayar, status <b>PAID</b> akan
-            muncul setelah webhook Xendit diterima. Coba refresh sebentar lagi.
-          </div>
         )}
-      </div>
+      </section>
 
-      <div className="mt-6 flex gap-3">
-        <button
-          onClick={() => location.reload()}
-          className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50"
-        >
-          Refresh Status
-        </button>
-        <Link
-          href="/"
-          className="rounded-xl bg-black px-4 py-2 text-sm text-white hover:opacity-90"
-        >
-          Kembali ke Beranda
-        </Link>
+      <div className="mt-4 flex gap-2">
+        <a href={`/thankyou/${order._id}`} className="rounded border px-3 py-2 text-sm">Refresh Status</a>
+        <a href="/" className="rounded bg-black px-3 py-2 text-sm text-white">Kembali ke Beranda</a>
       </div>
     </main>
   );
 }
 
-export const getServerSideProps: GetServerSideProps = async ({ params }) => {
+export const getServerSideProps: GetServerSideProps<{
+  order: OrderDTO;
+  forcePaid: boolean;
+}> = async ({ params }) => {
   await dbConnect();
 
-  const id = String(params?.id ?? '');
-  // ➜ beri generic pada lean<T>() agar bukan 'any' / union aneh
-  const doc = await OrderModel.findById(id).lean<OrderDocLean>().exec();
+  const id = String(params?.id || '');
+
+  // 🔧 Pastikan ambil SATU dokumen, BUKAN array:
+  const doc = await Order.findById(id)
+    .select('_id payment amounts') // ambil field yang perlu saja
+    .lean();
 
   if (!doc) return { notFound: true };
 
+  // Map ke DTO ringan (hindari tipe kompleks Mongoose di halaman)
   const order: OrderDTO = {
-    _id: String(doc._id),
+    _id: String((doc as any)._id),
     payment: {
-      status: (doc.payment?.status ?? 'PENDING') as OrderDTO['payment']['status'],
-      providerRef: doc.payment?.providerRef ?? '',
+      status: (doc as any).payment?.status ?? 'PENDING',
+      providerRef: (doc as any).payment?.providerRef ?? '',
+      invoiceUrl: (doc as any).payment?.invoiceUrl ?? '',
     },
     amounts: {
-      total: doc.amounts?.total ?? 0,
-      currency: doc.amounts?.currency ?? 'IDR',
+      total: Number((doc as any).amounts?.total ?? 0),
+      currency: (doc as any).amounts?.currency ?? 'IDR',
     },
-    customer: { name: doc.customer?.name ?? '' },
   };
 
-  return { props: { order } };
+  const forcePaid = process.env.NEXT_PUBLIC_FORCE_THANKYOU_PAID === 'true';
+
+  return { props: { order, forcePaid } };
 };
