@@ -2,6 +2,7 @@
 import mongoose, { Mongoose } from 'mongoose';
 import { MongoClient, Db } from 'mongodb';
 
+// Ambil ENV
 const MONGODB_URI = process.env.MONGODB_URI ?? '';
 const MONGODB_DB = process.env.MONGODB_DB ?? '';
 
@@ -30,20 +31,31 @@ const cachedNative =
 /** Koneksi Mongoose untuk Models */
 export async function dbConnect(): Promise<Mongoose> {
   if (cachedMongoose.conn) return cachedMongoose.conn;
-  if (!cachedMongoose.promise) cachedMongoose.promise = mongoose.connect(MONGODB_URI);
+  if (!cachedMongoose.promise) {
+    cachedMongoose.promise = mongoose.connect(MONGODB_URI);
+  }
   cachedMongoose.conn = await cachedMongoose.promise;
   return cachedMongoose.conn;
 }
 
-/** (Opsional) Native driver kalau mau pakai db.collection() langsung */
+/** Native driver (opsional) – langsung ke collection */
 export async function connectNative(): Promise<{ client: MongoClient; db: Db }> {
   if (!MONGODB_DB) throw new Error('Missing MONGODB_DB');
-  if (cachedNative.client) return { client: cachedNative.client, db: cachedNative.client.db(MONGODB_DB) };
-  if (!cachedNative.promise) cachedNative.promise = new MongoClient(MONGODB_URI).connect();
+  if (cachedNative.client) {
+    return {
+      client: cachedNative.client,
+      db: cachedNative.client.db(MONGODB_DB),
+    };
+  }
+  if (!cachedNative.promise) {
+    cachedNative.promise = new MongoClient(MONGODB_URI).connect();
+  }
   const client = await cachedNative.promise;
   cachedNative.client = client;
   return { client, db: client.db(MONGODB_DB) };
 }
 
 export type { Db };
+
+// Default export supaya bisa import tanpa kurung
 export default dbConnect;
