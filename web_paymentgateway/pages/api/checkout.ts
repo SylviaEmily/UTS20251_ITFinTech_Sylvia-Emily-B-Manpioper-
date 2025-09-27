@@ -1,111 +1,78 @@
-// pages/api/checkout.ts
-import type { NextApiRequest, NextApiResponse } from "next";
-import { dbConnect } from "../../lib/mongodb";
-import OrderModel from "../../models/order";
-import Xendit from "xendit-node";
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { dbConnect } from '../../lib/mongodb';
+import OrderModel from '../../models/order';
 
-// ---- minimal typing utk SDK ----
-interface InvoiceCreateResult {
-  data: { id?: string; invoiceUrl?: string; status?: string };
-}
-interface InvoiceApi {
-  createInvoice(args: {
-    data: {
-      externalId: string;
-      amount: number;
-      payerEmail?: string;
-      description?: string;
-      currency?: string;
-      successRedirectUrl?: string;
-      failureRedirectUrl?: string;
-    };
-  }): Promise<InvoiceCreateResult>;
-}
-interface XenditCtor {
-  new (args: { secretKey: string }): { InvoiceApi: new () => InvoiceApi };
-}
-const XenditTyped = Xendit as unknown as XenditCtor;
+const XENDIT_BASE = 'https://api.xendit.co/v2/invoices';
 
-type Resp =
-  | {
-      orderId: string;
-      status: string;
-      invoiceUrl: string;
-      externalId: string;
-      provider: "xendit";
-    }
-  | { message: string };
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse<Resp>) {
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
-    return res.status(405).json({ message: "Method not allowed" });
-  }
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    const { orderId } = req.body as { orderId?: string };
-    if (!orderId) return res.status(400).json({ message: "orderId is required" });
-
-    const secret = process.env.XENDIT_SECRET_KEY;
-    const appUrl = process.env.APP_URL;
-    if (!secret || !appUrl)
-      return res.status(500).json({ message: "Set ENV XENDIT_SECRET_KEY & APP_URL" });
+    // Body frontend: { customer, items, amounts } sesuai schema kamu
+    const { customer, items, amounts } = req.body || {};
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items is required and must be non-empty' });
+    }
+    if (!amounts?.total) {
+      return res.status(400).json({ error: 'amounts.total is required' });
+    }
 
     await dbConnect();
 
-    const order = await OrderModel.findById(orderId).lean();
-    if (!order) return res.status(404).json({ message: "Order not found" });
-
-    const total =
-      typeof order?.amounts?.total === "number" && Number.isFinite(order.amounts.total)
-        ? order.amounts.total
-        : 0;
-    if (!total) return res.status(400).json({ message: "Order total is invalid" });
-
-    const payerEmail = (order?.customer?.email as string | undefined) || undefined;
-    const currency = (order?.amounts?.currency as string | undefined) || "IDR";
-
-    const x = new XenditTyped({ secretKey: secret });
-    const invoiceApi = new x.InvoiceApi();
-
-    const created = await invoiceApi.createInvoice({
-      data: {
-        externalId: orderId,
-        amount: total,
-        payerEmail,
-        description: `Order ${orderId}`,
-        currency,
-        successRedirectUrl: `${appUrl}/success`,
-        failureRedirectUrl: `${appUrl}/failed`,
+    // 1) Buat order lokal dengan status PENDING & provider xendit
+    const order = await OrderModel.create({
+      customer,
+      items,
+      amounts,
+      payment: {
+        provider: 'xendit',
+        status: 'PENDING',
       },
     });
 
-    const invoiceId = created.data.id || "";
-    const invoiceUrl = created.data.invoiceUrl || "";
-    const status = String(created.data.status || "PENDING").toUpperCase();
+    // 2) Buat invoice Xendit (Test Mode karena pakai test secret key)
+    const callback_url = `${process.env.APP_URL}/api/xendit/webhook`;
 
-    await OrderModel.updateOne(
-      { _id: orderId },
-      {
-        $set: {
-          "payment.provider": "xendit",
-          "payment.providerRef": invoiceId,
-          "payment.invoiceUrl": invoiceUrl,
-          "payment.status": status === "PAID" ? "PAID" : "PENDING",
-        },
-      }
-    );
-
-    return res.status(200).json({
-      orderId,
-      status: status === "PAID" ? "PAID" : "PENDING",
-      invoiceUrl,
-      externalId: orderId,
-      provider: "xendit",
+    const resp = await fetch(XENDIT_BASE, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Basic ' + Buffer.from(process.env.XENDIT_SECRET_KEY + ':').toString('base64'),
+      },
+      body: JSON.stringify({
+        external_id: order._id.toString(),             // pakai _id order biar gampang trace
+        amount: amounts.total,
+        currency: amounts.currency || 'IDR',
+        payer_email: customer?.email || undefined,
+        description: `Order #${order._id}`,
+        success_redirect_url: `${process.env.APP_URL}/payment/success?ref=${order._id}`,
+        failure_redirect_url: `${process.env.APP_URL}/payment/failed?ref=${order._id}`,
+        callback_url,
+      }),
     });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "Internal Server Error";
-    console.error("Checkout error:", msg);
-    return res.status(500).json({ message: msg });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      // rollback sederhana jika perlu (opsional)
+      return res.status(resp.status).json({ error: `Xendit error: ${errText}` });
+    }
+
+    const invoice = await resp.json();
+
+    // 3) Update order dengan invoice id & url dari Xendit
+    order.payment.providerRef = invoice.id;      // simpan Xendit invoice id
+    order.payment.invoiceUrl  = invoice.invoice_url;
+    order.payment.channel     = invoice.payment_method || ''; // bila tersedia
+    await order.save();
+
+    // 4) Balikkan URL invoice untuk redirect user
+    return res.status(200).json({
+      orderId: order._id,
+      invoiceId: invoice.id,
+      checkoutUrl: invoice.invoice_url,
+    });
+  } catch (e: any) {
+    console.error(e);
+    return res.status(500).json({ error: 'Internal error' });
   }
 }

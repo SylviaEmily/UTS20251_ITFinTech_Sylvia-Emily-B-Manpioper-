@@ -9,7 +9,6 @@ const ItemSchema = new Schema(
     price:     { type: Number, required: true, min: 0 },
     qty:       { type: Number, required: true, min: 1 },
     lineTotal: { type: Number, required: true, min: 0 },
-    // jika mau simpan gambar, buka baris ini lalu konsisten di API:
     // imageUrl:  { type: String, default: '' },
   },
   { _id: false }
