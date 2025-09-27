@@ -1,18 +1,38 @@
+// lib/mongodb.ts
 import mongoose from 'mongoose';
 
-const MONGODB_URI = process.env.MONGODB_URI!;
-if (!MONGODB_URI) throw new Error('Missing MONGODB_URI');
+type MongooseCache = {
+  conn: typeof mongoose | null;
+  promise: Promise<typeof mongoose> | null;
+};
 
-let cached = (global as any).mongoose;
-if (!cached) cached = (global as any).mongoose = { conn: null, promise: null };
+// deklarasi global cache dengan tipe jelas
+declare global {
+  // eslint-disable-next-line no-var
+  var __mongooseCache: MongooseCache | undefined;
+}
 
-export async function dbConnect() {
-  if (cached.conn) return cached.conn;
-  if (!cached.promise) {
-    cached.promise = mongoose.connect(MONGODB_URI, {
-      dbName: 'app',
-    }).then((m) => m);
+// helper: pastikan uri ada dan kembalikan sebagai string murni
+function getMongoUri(): string {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) {
+    throw new Error('Missing MONGODB_URI environment variable');
   }
-  cached.conn = await cached.promise;
-  return cached.conn;
+  return uri;
+}
+
+const globalCache: MongooseCache =
+  global.__mongooseCache ?? { conn: null, promise: null };
+
+export async function dbConnect(): Promise<typeof mongoose> {
+  if (globalCache.conn) return globalCache.conn;
+
+  if (!globalCache.promise) {
+    const uri = getMongoUri(); // <-- sekarang pasti string, tidak union
+    globalCache.promise = mongoose.connect(uri, { dbName: 'app' });
+  }
+
+  globalCache.conn = await globalCache.promise;
+  global.__mongooseCache = globalCache; // simpan untuk reuse
+  return globalCache.conn;
 }
