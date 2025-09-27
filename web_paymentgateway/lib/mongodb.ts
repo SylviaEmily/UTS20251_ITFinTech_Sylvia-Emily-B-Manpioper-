@@ -1,33 +1,23 @@
 import mongoose from 'mongoose';
 
-type MongooseCache = {
-  conn: typeof mongoose | null;
-  promise: Promise<typeof mongoose> | null;
-};
+type Cache = { conn: typeof mongoose | null; promise: Promise<typeof mongoose> | null };
+declare global { var __mongooseCache: Cache | undefined; }
 
-declare global {
-  // no-var dihapus agar tidak muncul warning “unused eslint-disable”
-  var __mongooseCache: MongooseCache | undefined;
+function requireEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing ${name}`);
+  return v;
 }
 
-function getMongoUri(): string {
-  const uri = process.env.MONGODB_URI;
-  if (!uri) throw new Error('Missing MONGODB_URI environment variable');
-  return uri;
-}
-
-const globalCache: MongooseCache =
-  global.__mongooseCache ?? { conn: null, promise: null };
+const cache: Cache = global.__mongooseCache ?? { conn: null, promise: null };
 
 export async function dbConnect(): Promise<typeof mongoose> {
-  if (globalCache.conn) return globalCache.conn;
-
-  if (!globalCache.promise) {
-    const uri = getMongoUri();
-    globalCache.promise = mongoose.connect(uri, { dbName: 'app' });
+  if (cache.conn) return cache.conn;
+  if (!cache.promise) {
+    const uri = requireEnv('MONGODB_URI');  // <-- kalau salah nama, ini langsung error
+    cache.promise = mongoose.connect(uri);  // DB name sudah ada di URI
   }
-
-  globalCache.conn = await globalCache.promise;
-  global.__mongooseCache = globalCache;
-  return globalCache.conn;
+  cache.conn = await cache.promise;
+  global.__mongooseCache = cache;
+  return cache.conn;
 }
