@@ -1,7 +1,7 @@
 // pages/api/xendit/webhook.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { dbConnect } from "@/lib/mongodb";
-import OrderModel from "@/models/order";
+import { dbConnect } from "../../../lib/mongodb";
+import OrderModel from "../../../models/order";
 
 type InternalStatus = "PENDING" | "PAID" | "FAILED" | "CANCELLED";
 

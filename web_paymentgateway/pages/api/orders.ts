@@ -1,8 +1,7 @@
 // pages/api/orders.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { dbConnect } from "@/lib/mongodb";
-import OrderModel/*, { type OrderBase }*/ from "@/models/order";
-
+import { dbConnect } from "../../lib/mongodb";
+import OrderModel /* ... */ from "../../models/order";
 // Helpers
 const toStr = (v: unknown): string => (typeof v === "string" ? v : "");
 const toNum = (v: unknown, def = 0): number =>

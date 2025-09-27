@@ -1,7 +1,7 @@
 // pages/api/checkout.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { dbConnect } from "@/lib/mongodb";
-import OrderModel from "@/models/order";
+import { dbConnect } from "../../lib/mongodb";
+import OrderModel from "../../models/order";
 import Xendit from "xendit-node";
 
 // ---- minimal typing utk SDK ----
