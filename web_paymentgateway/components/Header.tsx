@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Image from 'next/image';
 import { useCart } from '@/context/CartContext';
 
 type Props = {
@@ -19,7 +20,14 @@ export default function Header({ showMenu = true }: Props) {
             ☰
           </button>
         )}
-        <span className="font-semibold">Logo</span>
+        {/* Logo dengan ukuran lebih kecil */}
+        <Image
+          src="/images/logo.png"
+          alt="Logo"
+          width={60} // misalnya 80px
+          height={30} // misalnya 30px
+          className="h-[60px] w-[60px]" // supaya rasio tetap
+        />
       </div>
 
       <Link

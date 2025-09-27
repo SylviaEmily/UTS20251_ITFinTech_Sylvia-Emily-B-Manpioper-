@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { dbConnect } from '@/lib/mongodb';
-import Order from '@/models/order'; // pastikan casing file = 'models/order.ts'
+import Order from '@/models/Order'; // pastikan casing file = 'models/order.ts'
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).json({ message: 'Method not allowed' });

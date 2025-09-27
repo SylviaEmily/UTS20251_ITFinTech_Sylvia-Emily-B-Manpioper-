@@ -13,7 +13,7 @@ export default function Checkout() {
       </div>
 
       <section className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        {/* ===== KIRI: Daftar Item (lebih padat) ===== */}
+        {/* ===== KIRI: Daftar Item ===== */}
         <div className="md:col-span-2 rounded-2xl border shadow-sm">
           {items.length === 0 ? (
             <div className="p-8 text-center">
@@ -24,14 +24,32 @@ export default function Checkout() {
               {items.map((ci) => {
                 const lineTotal = ci.product.price * ci.qty;
                 return (
-                  <div key={ci.product.id} className="grid grid-cols-12 items-center gap-3 px-4 py-3">
-                    {/* thumbnail kecil agar rapat */}
-                    <div className="col-span-1 hidden h-10 w-10 rounded bg-gray-200 md:block" />
+                  <div
+                    key={ci.product.id}
+                    className="grid grid-cols-12 items-center gap-3 px-4 py-3"
+                  >
+                    {/* thumbnail produk */}
+                    <div className="col-span-1 hidden md:block">
+                      <div className="h-10 w-10 overflow-hidden rounded bg-gray-200">
+                        {ci.product.imageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={ci.product.imageUrl}
+                            alt={ci.product.name}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : null}
+                      </div>
+                    </div>
+
                     {/* nama & harga satuan */}
                     <div className="col-span-7 md:col-span-6">
                       <p className="font-medium leading-tight">{ci.product.name}</p>
-                      <p className="text-xs opacity-70">{formatRupiah(ci.product.price)} / item</p>
+                      <p className="text-xs opacity-70">
+                        {formatRupiah(ci.product.price)} / item
+                      </p>
                     </div>
+
                     {/* kontrol qty */}
                     <div className="col-span-3 flex items-center justify-end gap-2">
                       <button
@@ -50,6 +68,7 @@ export default function Checkout() {
                         +
                       </button>
                     </div>
+
                     {/* total baris */}
                     <div className="col-span-2 text-right font-medium">
                       {formatRupiah(lineTotal)}
@@ -61,7 +80,7 @@ export default function Checkout() {
           )}
         </div>
 
-        {/* ===== KANAN: Ringkasan (sticky, rapat) ===== */}
+        {/* ===== KANAN: Ringkasan (sticky) ===== */}
         <aside className="h-max rounded-2xl border p-4 shadow-sm md:sticky md:top-6">
           <h3 className="mb-3 text-base font-semibold">Ringkasan Belanja</h3>
           <div className="space-y-2 text-sm">
