@@ -1,34 +1,93 @@
+// pages/payment.tsx
 import Link from 'next/link';
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { useCart } from '@/context/CartContext';
 
-function useOrderSubmit(subtotal: number, tax: number, total: number, items: any[]) {
+/** ====== Types ====== */
+type PayStatus = 'idle' | 'processing' | 'success' | 'error';
+
+type CartProduct = {
+  id: string;
+  name: string;
+  price: number;
+  imageUrl?: string;
+};
+
+type CartItem = {
+  product: CartProduct;
+  qty: number;
+};
+
+type OrderItemPayload = {
+  productId: string;
+  name: string;
+  price: number;
+  qty: number;
+  lineTotal: number;
+  /** Opsional: akan diabaikan oleh schema jika field ini tidak ada di model Order */
+  imageUrl?: string;
+};
+
+type OrderPayload = {
+  customer: {
+    name: string;
+    phone: string;
+    address: string;
+    city: string;
+    postalCode: string;
+  };
+  items: OrderItemPayload[];
+  amounts: {
+    subtotal: number;
+    tax: number;
+    shipping: number;
+    total: number; // subtotal + tax + shipping
+    currency?: string; // di server default 'IDR'
+  };
+  /** Catatan: schema Order kita menaruh provider di `payment.provider`.
+   *  Payload ini tetap kompatibel, server boleh memetakan ke sana.
+   */
+  provider: 'manual' | 'midtrans' | 'xendit' | 'stripe';
+};
+
+type ApiOrderResponse = {
+  orderId: string;
+  status: 'PENDING' | 'PAID' | 'FAILED' | 'CANCELLED';
+};
+
+/** ====== Hook submit order (tanpa any) ====== */
+function useOrderSubmit(
+  subtotal: number,
+  tax: number,
+  total: number,
+  items: CartItem[]
+) {
   const shipping = subtotal > 0 ? 12_000 : 0; // contoh ongkir
 
-  const buildPayload = (form: HTMLFormElement | null) => {
+  const buildPayload = (form: HTMLFormElement | null): OrderPayload => {
     const fd = form ? new FormData(form) : new FormData();
     return {
       customer: {
-        name: String(fd.get('name') || ''),
-        phone: String(fd.get('phone') || ''),
-        address: String(fd.get('address') || ''),
-        city: String(fd.get('city') || ''),
-        postalCode: String(fd.get('postalCode') || ''),
+        name: String(fd.get('name') ?? ''),
+        phone: String(fd.get('phone') ?? ''),
+        address: String(fd.get('address') ?? ''),
+        city: String(fd.get('city') ?? ''),
+        postalCode: String(fd.get('postalCode') ?? ''),
       },
-      items: items.map((ci: any) => ({
+      items: items.map<OrderItemPayload>((ci) => ({
         productId: ci.product.id,
         name: ci.product.name,
         price: ci.product.price,
         qty: ci.qty,
         lineTotal: ci.product.price * ci.qty,
+        imageUrl: ci.product.imageUrl || undefined, // opsional snapshot
       })),
       amounts: { subtotal, tax, shipping, total: total + shipping },
-      provider: 'manual', // nanti ganti 'midtrans'/'xendit' saat integrasi gateway
+      provider: 'manual', // ganti 'xendit' saat integrasi gateway
     };
   };
 
-  // === versi submit dengan parsing aman ===
-  const submit = async (formEl: HTMLFormElement | null) => {
+  const submit = async (formEl: HTMLFormElement | null): Promise<ApiOrderResponse> => {
     const payload = buildPayload(formEl);
 
     const res = await fetch('/api/orders', {
@@ -37,41 +96,52 @@ function useOrderSubmit(subtotal: number, tax: number, total: number, items: any
       body: JSON.stringify(payload),
     });
 
-    // baca dulu sebagai text (bisa JSON atau HTML error)
     const text = await res.text();
-    let data: any = null;
+    let data: unknown;
     try {
       data = JSON.parse(text);
     } catch {
-      // server mengirim HTML (mis. 404/500 dari Next)
-      throw new Error(
-        `Gagal parse JSON. Status ${res.status}. Body: ${text.slice(0, 120)}...`
-      );
+      throw new Error(`Gagal parse JSON. Status ${res.status}. Body: ${text.slice(0, 120)}...`);
     }
 
     if (!res.ok) {
-      throw new Error(data?.message || `Gagal: HTTP ${res.status}`);
+      const msg =
+        typeof data === 'object' && data !== null && 'message' in data
+          ? String((data as { message?: unknown }).message ?? `Gagal: HTTP ${res.status}`)
+          : `Gagal: HTTP ${res.status}`;
+      throw new Error(msg);
     }
 
-    return data as { orderId: string; status: string };
+    // validasi bentuk response minimum
+    const dto = data as Partial<ApiOrderResponse>;
+    if (!dto.orderId) throw new Error('Response tidak berisi orderId');
+    return { orderId: dto.orderId, status: (dto.status ?? 'PENDING') as ApiOrderResponse['status'] };
   };
 
   return { submit, shipping };
 }
 
-export default function Checkout() {
+/** ====== Page ====== */
+export default function Payment() {
   const { items, inc, dec, subtotal, tax, total, formatRupiah } = useCart();
   const formRef = useRef<HTMLFormElement>(null);
   const { submit, shipping } = useOrderSubmit(subtotal, tax, total, items);
   const grand = total + shipping;
 
+  const [status, setStatus] = useState<PayStatus>('idle');
+
   async function handleConfirmPay() {
     try {
+      setStatus('processing');
       const { orderId } = await submit(formRef.current);
+      setStatus('success');
       alert(`Order berhasil dibuat: ${orderId}`);
-      // window.location.href = '/payment'; // jika ingin redirect
-    } catch (e: any) {
-      alert(e.message || 'Gagal membuat order');
+      // TODO: redirect ke halaman sukses/Invoice jika sudah ada
+      // window.location.href = '/thankyou/' + orderId;
+    } catch (e: unknown) {
+      setStatus('error');
+      const msg = e instanceof Error ? e.message : 'Gagal membuat order';
+      alert(msg);
     }
   }
 
@@ -80,11 +150,11 @@ export default function Checkout() {
       {/* Header */}
       <div className="mb-4 flex items-center gap-2">
         <Link href="/" className="text-sm opacity-70">← Back</Link>
-        <h2 className="mx-auto text-center text-lg font-semibold">Checkout</h2>
+        <h2 className="mx-auto text-center text-lg font-semibold">Payment</h2>
       </div>
 
       <section className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        {/* ===== KIRI: Daftar Item (lebih padat) ===== */}
+        {/* ===== KIRI: Daftar Item (dengan gambar) ===== */}
         <div className="md:col-span-2 rounded-2xl border shadow-sm">
           {items.length === 0 ? (
             <div className="p-8 text-center">
@@ -95,20 +165,39 @@ export default function Checkout() {
               {items.map((ci) => {
                 const lineTotal = ci.product.price * ci.qty;
                 return (
-                  <div key={ci.product.id} className="grid grid-cols-12 items-center gap-3 px-4 py-3">
-                    {/* thumbnail kecil agar rapat */}
-                    <div className="col-span-1 hidden h-10 w-10 rounded bg-gray-200 md:block" />
+                  <div
+                    key={ci.product.id}
+                    className="grid grid-cols-12 items-center gap-3 px-4 py-3"
+                  >
+                    {/* thumbnail produk – tampil di semua ukuran */}
+                    <div className="col-span-1">
+                      <div className="h-10 w-10 overflow-hidden rounded bg-gray-200">
+                        {ci.product.imageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={ci.product.imageUrl}
+                            alt={ci.product.name}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : null}
+                      </div>
+                    </div>
+
                     {/* nama & harga satuan */}
                     <div className="col-span-7 md:col-span-6">
                       <p className="font-medium leading-tight">{ci.product.name}</p>
-                      <p className="text-xs opacity-70">{formatRupiah(ci.product.price)} / item</p>
+                      <p className="text-xs opacity-70">
+                        {formatRupiah(ci.product.price)} / item
+                      </p>
                     </div>
+
                     {/* kontrol qty */}
                     <div className="col-span-3 flex items-center justify-end gap-2">
                       <button
                         onClick={() => dec(ci.product.id)}
                         className="h-8 w-8 rounded border leading-none"
                         aria-label="decrease"
+                        disabled={status === 'processing'}
                       >
                         −
                       </button>
@@ -117,12 +206,14 @@ export default function Checkout() {
                         onClick={() => inc(ci.product.id)}
                         className="h-8 w-8 rounded border leading-none"
                         aria-label="increase"
+                        disabled={status === 'processing'}
                       >
                         +
                       </button>
                     </div>
+
                     {/* total baris */}
-                    <div className="col-span-2 text-right font-medium">
+                    <div className="col-span-1 text-right font-medium">
                       {formatRupiah(lineTotal)}
                     </div>
                   </div>
@@ -180,8 +271,12 @@ export default function Checkout() {
           </form>
 
           {/* Tombol aksi */}
-          <button onClick={handleConfirmPay} className="mt-4 w-full rounded-xl bg-black py-3 text-white">
-            Confirm &amp; Pay
+          <button
+            onClick={handleConfirmPay}
+            className="mt-4 w-full rounded-xl bg-black py-3 text-white"
+            disabled={status === 'processing' || items.length === 0}
+          >
+            {status === 'processing' ? 'Processing…' : 'Confirm & Pay'}
           </button>
         </aside>
       </section>

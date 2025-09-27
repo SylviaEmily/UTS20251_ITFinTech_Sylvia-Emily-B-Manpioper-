@@ -28,8 +28,8 @@ export default function Checkout() {
                     key={ci.product.id}
                     className="grid grid-cols-12 items-center gap-3 px-4 py-3"
                   >
-                    {/* thumbnail produk */}
-                    <div className="col-span-1 hidden md:block">
+                    {/* thumbnail produk – selalu tampil */}
+                    <div className="col-span-1">
                       <div className="h-10 w-10 overflow-hidden rounded bg-gray-200">
                         {ci.product.imageUrl ? (
                           // eslint-disable-next-line @next/next/no-img-element
