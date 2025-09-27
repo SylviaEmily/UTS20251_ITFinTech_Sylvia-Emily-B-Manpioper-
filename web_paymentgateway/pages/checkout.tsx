@@ -1,110 +1,152 @@
-import Link from 'next/link';
-import { useCart } from '@/context/CartContext';
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { dbConnect } from '@/lib/mongodb';
+import OrderModel, { type OrderBase } from '@/models/Order';
+import { xenditService } from '@/lib/xendit';
 
-export default function Checkout() {
-  const { items, inc, dec, subtotal, tax, total, formatRupiah } = useCart();
+interface CheckoutItem {
+  productId: string;
+  name: string;
+  price: number;
+  qty: number;
+  imageUrl?: string;
+}
 
-  return (
-    <main className="mx-auto max-w-7xl p-8">
-      {/* Header */}
-      <div className="mb-4 flex items-center gap-2">
-        <Link href="/" className="text-sm opacity-70">← Back</Link>
-        <h2 className="mx-auto text-center text-lg font-semibold">Checkout</h2>
-      </div>
+interface CheckoutRequest {
+  customer: {
+    name: string;
+    phone: string;
+    email: string;
+    address: string;
+    city: string;
+    postalCode: string;
+  };
+  items: CheckoutItem[];
+  amounts: {
+    subtotal?: number;
+    tax?: number;
+    shipping?: number;
+    total?: number;
+    currency?: string;
+  };
+  notes?: string;
+}
 
-      <section className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        {/* ===== KIRI: Daftar Item ===== */}
-        <div className="md:col-span-2 rounded-2xl border shadow-sm">
-          {items.length === 0 ? (
-            <div className="p-8 text-center">
-              Keranjang kosong. <Link className="underline" href="/">Tambah item</Link>.
-            </div>
-          ) : (
-            <div className="divide-y">
-              {items.map((ci) => {
-                const lineTotal = ci.product.price * ci.qty;
-                return (
-                  <div
-                    key={ci.product.id}
-                    className="grid grid-cols-12 items-center gap-3 px-4 py-3"
-                  >
-                    {/* thumbnail produk – selalu tampil */}
-                    <div className="col-span-1">
-                      <div className="h-10 w-10 overflow-hidden rounded bg-gray-200">
-                        {ci.product.imageUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={ci.product.imageUrl}
-                            alt={ci.product.name}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : null}
-                      </div>
-                    </div>
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ message: 'Method not allowed' });
+  }
 
-                    {/* nama & harga satuan */}
-                    <div className="col-span-7 md:col-span-6">
-                      <p className="font-medium leading-tight">{ci.product.name}</p>
-                      <p className="text-xs opacity-70">
-                        {formatRupiah(ci.product.price)} / item
-                      </p>
-                    </div>
+  try {
+    await dbConnect();
+    const body: CheckoutRequest = req.body;
 
-                    {/* kontrol qty */}
-                    <div className="col-span-3 flex items-center justify-end gap-2">
-                      <button
-                        onClick={() => dec(ci.product.id)}
-                        className="h-8 w-8 rounded border leading-none"
-                        aria-label="decrease"
-                      >
-                        −
-                      </button>
-                      <span className="w-6 text-center text-sm">{ci.qty}</span>
-                      <button
-                        onClick={() => inc(ci.product.id)}
-                        className="h-8 w-8 rounded border leading-none"
-                        aria-label="increase"
-                      >
-                        +
-                      </button>
-                    </div>
+    // Validate required fields
+    if (!body.customer?.email || !body.items || body.items.length === 0) {
+      return res.status(400).json({ 
+        message: 'Missing required fields: customer email and items are required' 
+      });
+    }
 
-                    {/* total baris */}
-                    <div className="col-span-2 text-right font-medium">
-                      {formatRupiah(lineTotal)}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+    // Calculate amounts
+    const items = body.items.map(item => ({
+      ...item,
+      lineTotal: item.price * item.qty,
+    }));
 
-        {/* ===== KANAN: Ringkasan (sticky) ===== */}
-        <aside className="h-max rounded-2xl border p-4 shadow-sm md:sticky md:top-6">
-          <h3 className="mb-3 text-base font-semibold">Ringkasan Belanja</h3>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span>Subtotal</span>
-              <span>{formatRupiah(subtotal)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>PPN (11%)</span>
-              <span>{formatRupiah(tax)}</span>
-            </div>
-            <div className="flex justify-between text-base font-semibold">
-              <span>Total</span>
-              <span>{formatRupiah(total)}</span>
-            </div>
-          </div>
+    const subtotal = items.reduce((sum, item) => sum + item.lineTotal, 0);
+    const tax = body.amounts?.tax || 0;
+    const shipping = body.amounts?.shipping || 0;
+    const total = body.amounts?.total || (subtotal + tax + shipping);
 
-          <Link href="/payment" className="mt-4 block">
-            <button className="w-full rounded-xl bg-black py-3 text-white">
-              Lanjut ke Pembayaran →
-            </button>
-          </Link>
-        </aside>
-      </section>
-    </main>
-  );
+    if (total <= 0) {
+      return res.status(400).json({ message: 'Total amount must be greater than 0' });
+    }
+
+    // Create order in database
+    const orderData: OrderBase = {
+      customer: {
+        name: body.customer.name,
+        phone: body.customer.phone,
+        email: body.customer.email,
+        address: body.customer.address,
+        city: body.customer.city,
+        postalCode: body.customer.postalCode,
+      },
+      items,
+      amounts: {
+        subtotal,
+        tax,
+        shipping,
+        total,
+        currency: body.amounts?.currency || 'IDR',
+      },
+      payment: {
+        provider: 'xendit',
+        status: 'PENDING',
+        providerRef: '',
+        invoiceUrl: '',
+        channel: '',
+        failureReason: '',
+      },
+      notes: body.notes,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const order = await OrderModel.create(orderData);
+
+    try {
+      // Create Xendit invoice - MENGGUNAKAN CAMELCASE
+      const xenditInvoice = await xenditService.createInvoice({
+        externalID: `ORDER-${order._id}`,           // camelCase
+        amount: total,
+        payerEmail: body.customer.email,            // camelCase
+        description: `Payment for order ${order._id}`,
+        successRedirectURL: `${process.env.APP_URL}/orders/${order._id}/success`,  // camelCase
+        failureRedirectURL: `${process.env.APP_URL}/orders/${order._id}/failed`,   // camelCase
+        currency: 'IDR',
+        items: items.map(item => ({
+          name: item.name,
+          quantity: item.qty,
+          price: item.price,
+        })),
+      });
+
+      // Update order with Xendit invoice details
+      order.payment.providerRef = xenditInvoice.id;
+      order.payment.invoiceUrl = xenditInvoice.invoice_url;
+      order.payment.status = 'PENDING';
+      await order.save();
+
+      return res.status(201).json({
+        success: true,
+        orderId: order._id,
+        invoiceUrl: xenditInvoice.invoice_url,
+        invoiceId: xenditInvoice.id,
+        amount: total,
+        status: 'PENDING',
+      });
+
+    } catch (xenditError: any) {
+      // Xendit failed, but order is saved
+      order.payment.status = 'FAILED';
+      order.payment.failureReason = xenditError.message || 'Xendit service unavailable';
+      await order.save();
+
+      return res.status(201).json({
+        success: true,
+        orderId: order._id,
+        message: 'Order created but payment initialization failed. Please contact support.',
+        status: 'FAILED',
+        needsManualPayment: true,
+      });
+    }
+
+  } catch (error: any) {
+    console.error('Checkout error:', error);
+    return res.status(500).json({ 
+      message: 'Internal server error',
+      error: error.message 
+    });
+  }
 }
