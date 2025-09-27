@@ -1,27 +1,20 @@
-// models/order.ts
 import {
-  Schema,
-  model,
-  models,
-  type Model,
-  type InferSchemaType,
-  Types,
+  Schema, model, models, type Model, type InferSchemaType, Types,
 } from 'mongoose';
 
-/** Subdocument: Item */
 const ItemSchema = new Schema(
   {
     productId: { type: String, required: true },
     name:      { type: String, required: true },
-    price:     { type: Number, required: true }, // IDR snapshot
+    price:     { type: Number, required: true, min: 0 },
     qty:       { type: Number, required: true, min: 1 },
-    lineTotal: { type: Number, required: true },
-    imageUrl:  { type: String, default: '' },    // opsional
+    lineTotal: { type: Number, required: true, min: 0 },
+    // jika mau simpan gambar, buka baris ini lalu konsisten di API:
+    // imageUrl:  { type: String, default: '' },
   },
   { _id: false }
 );
 
-/** Order */
 const OrderSchema = new Schema(
   {
     customer: {
@@ -32,18 +25,14 @@ const OrderSchema = new Schema(
       postalCode: { type: String, trim: true },
       email:      { type: String, trim: true },
     },
-
-    // >>> Perbaikan: beri tipe pada parameter validator
     items: {
       type: [ItemSchema],
       required: true,
       validate: {
-        validator: (v: Array<Record<string, unknown>>) =>
-          Array.isArray(v) && v.length > 0,
+        validator: (v: Array<Record<string, unknown>>) => Array.isArray(v) && v.length > 0,
         message: 'Order harus memiliki minimal 1 item',
       },
     },
-
     amounts: {
       subtotal: { type: Number, required: true, min: 0 },
       tax:      { type: Number, required: true, min: 0 },
@@ -51,36 +40,25 @@ const OrderSchema = new Schema(
       total:    { type: Number, required: true, min: 0 },
       currency: { type: String, default: 'IDR' },
     },
-
     payment: {
-      provider:    { type: String, enum: ['manual', 'midtrans', 'xendit', 'stripe'], default: 'manual' },
-      providerRef: { type: String, default: '' },
-      status:      { type: String, enum: ['PENDING', 'PAID', 'FAILED', 'CANCELLED'], default: 'PENDING' },
-      invoiceUrl:  { type: String, default: '' },
-      channel:     { type: String, default: '' },
-      paidAt:      { type: Date },
-      failureReason: { type: String, default: '' },
+      provider:     { type: String, enum: ['manual','midtrans','xendit','stripe'], default: 'manual' },
+      providerRef:  { type: String, default: '' }, // invoice id dari provider
+      status:       { type: String, enum: ['PENDING','PAID','FAILED','CANCELLED'], default: 'PENDING' },
+      invoiceUrl:   { type: String, default: '' },
+      channel:      { type: String, default: '' },
+      paidAt:       { type: Date },
+      failureReason:{ type: String, default: '' },
     },
   },
   { timestamps: true }
 );
 
-/** Index */
 OrderSchema.index({ 'payment.status': 1, createdAt: -1 });
 OrderSchema.index({ 'payment.providerRef': 1 }, { sparse: true });
-OrderSchema.index({ createdAt: -1 });
 
-/** Types */
 export type OrderItem = InferSchemaType<typeof ItemSchema>;
 export type OrderBase = InferSchemaType<typeof OrderSchema>;
-export type Order = OrderBase & {
-  _id: Types.ObjectId;
-  createdAt: Date;
-  updatedAt: Date;
-};
+export type Order = OrderBase & { _id: Types.ObjectId; createdAt: Date; updatedAt: Date; };
 
-/** Model */
-const OrderModel: Model<Order> =
-  (models.Order as Model<Order>) || model<Order>('Order', OrderSchema);
-
+const OrderModel: Model<Order> = (models.Order as Model<Order>) || model<Order>('Order', OrderSchema);
 export default OrderModel;
