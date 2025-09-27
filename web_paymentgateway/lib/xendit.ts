@@ -1,126 +1,92 @@
-// lib/xendit.ts - FIXED VERSION
-export interface XenditInvoiceRequest {
+// lib/xendit.ts
+type CreateInvoiceCamel = {
   externalID: string;
   amount: number;
   payerEmail?: string;
-  description: string;
+  description?: string;
   successRedirectURL?: string;
   failureRedirectURL?: string;
-  currency?: string;
-  items?: Array<{
-    name: string;
-    quantity: number;
-    price: number;
-  }>;
-}
+  currency?: 'IDR';
+  items?: Array<{ name: string; quantity: number; price: number }>;
+  idempotencyKey?: string; // optional
+  timeoutMs?: number;      // optional
+};
 
-export interface XenditInvoiceResponse {
-  id: string;
+type XenditCreateInvoiceRequest = {
   external_id: string;
-  status: 'PENDING' | 'PAID' | 'EXPIRED' | 'FAILED';
   amount: number;
-  payer_email: string;
-  description: string;
+  payer_email?: string;
+  description?: string;
+  success_redirect_url?: string;
+  failure_redirect_url?: string;
+  currency?: 'IDR';
+  items?: Array<{ name: string; quantity: number; price: number }>;
+};
+
+export type XenditInvoice = {
+  id: string;
   invoice_url: string;
-  expiry_date: string;
-  created: string;
-  updated: string;
+  status?: 'PENDING' | 'PAID' | 'EXPIRED' | 'VOIDED' | 'FAILED';
+};
+
+export type XenditErrorBody = { message?: string; error_code?: string; [k: string]: unknown };
+
+function toSnake(c: CreateInvoiceCamel): XenditCreateInvoiceRequest {
+  return {
+    external_id: c.externalID,
+    amount: c.amount,
+    payer_email: c.payerEmail,
+    description: c.description,
+    success_redirect_url: c.successRedirectURL,
+    failure_redirect_url: c.failureRedirectURL,
+    currency: c.currency ?? 'IDR',
+    items: c.items,
+  };
 }
 
-export interface XenditError {
-  message: string;
-  code?: string;
+// ✅ type guard tanpa any
+function isXenditInvoice(x: unknown): x is XenditInvoice {
+  if (typeof x !== 'object' || x === null) return false;
+  const o = x as Record<string, unknown>;
+  return typeof o.id === 'string' && typeof o.invoice_url === 'string';
 }
 
-export class XenditService {
-  private secretKey: string;
+export const xenditService = {
+  async createInvoice(input: CreateInvoiceCamel): Promise<XenditInvoice> {
+    const payload = toSnake(input);
 
-  constructor() {
-    this.secretKey = process.env.XENDIT_SECRET_KEY || '';
-    if (!this.secretKey) {
-      console.warn('XENDIT_SECRET_KEY is not set');
-    }
-  }
+    // timeout support (opsional)
+    const controller = new AbortController();
+    const to = setTimeout(() => controller.abort(), input.timeoutMs ?? 30_000);
 
-  private getAuthHeader(): string {
-    return 'Basic ' + Buffer.from(this.secretKey + ':').toString('base64');
-  }
-
-  async createInvoice(data: XenditInvoiceRequest): Promise<XenditInvoiceResponse> {
     try {
-      // Convert camelCase to underscore untuk Xendit API
-      const apiData = {
-        external_id: data.externalID,
-        amount: data.amount,
-        payer_email: data.payerEmail,
-        description: data.description,
-        success_redirect_url: data.successRedirectURL,
-        failure_redirect_url: data.failureRedirectURL,
-        currency: data.currency || 'IDR',
-        items: data.items || [],
-      };
-
-      console.log('Sending to Xendit:', JSON.stringify(apiData, null, 2));
-
-      const response = await fetch('https://api.xendit.co/v2/invoices', {
+      const r = await fetch('https://api.xendit.co/v2/invoices', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': this.getAuthHeader(),
+          Authorization:
+            'Basic ' + Buffer.from(String(process.env.XENDIT_SECRET_KEY) + ':').toString('base64'),
+          ...(input.idempotencyKey ? { 'Idempotency-Key': input.idempotencyKey } : {}),
+          'User-Agent': 'web_paymentgateway/1.0 (+Next.js)',
         },
-        body: JSON.stringify(apiData),
+        body: JSON.stringify(payload),
+        signal: controller.signal,
       });
 
-      if (!response.ok) {
-        const errorData: unknown = await response.json();
-        const errorMessage = this.getErrorMessage(errorData);
-        console.error('Xendit API error:', errorData);
-        throw new Error(errorMessage || `Xendit API error: ${response.status}`);
+      const raw: unknown = await r.json();
+
+      if (!r.ok) {
+        const err = raw as XenditErrorBody | undefined;
+        const msg = err?.message ?? `Failed to create invoice (HTTP ${r.status})`;
+        throw new Error(msg);
       }
 
-      const result: XenditInvoiceResponse = await response.json();
-      console.log('Xendit response:', result);
-      return result;
-
-    } catch (error: unknown) {
-      console.error('Xendit createInvoice error:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      throw new Error(`Failed to create Xendit invoice: ${errorMessage}`);
+      if (!isXenditInvoice(raw)) {
+        throw new Error('Unexpected response from Xendit');
+      }
+      return raw;
+    } finally {
+      clearTimeout(to);
     }
-  }
-
-  async getInvoice(invoiceId: string): Promise<XenditInvoiceResponse> {
-    try {
-      const response = await fetch(`https://api.xendit.co/v2/invoices/${invoiceId}`, {
-        headers: {
-          'Authorization': this.getAuthHeader(),
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Xendit API error: ${response.status}`);
-      }
-
-      const result: XenditInvoiceResponse = await response.json();
-      return result;
-    } catch (error: unknown) {
-      console.error('Xendit getInvoice error:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      throw new Error(`Failed to get Xendit invoice: ${errorMessage}`);
-    }
-  }
-
-  private getErrorMessage(errorData: unknown): string {
-    if (typeof errorData === 'object' && errorData !== null) {
-      if ('message' in errorData && typeof errorData.message === 'string') {
-        return errorData.message;
-      }
-      if ('error' in errorData && typeof errorData.error === 'string') {
-        return errorData.error;
-      }
-    }
-    return 'Unknown Xendit error';
-  }
-}
-
-export const xenditService = new XenditService();
+  },
+};

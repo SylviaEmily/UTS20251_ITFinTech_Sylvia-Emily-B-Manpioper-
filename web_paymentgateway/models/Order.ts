@@ -1,34 +1,45 @@
-import { Schema, model, models } from 'mongoose';
+import { Schema, model, models, type InferSchemaType } from 'mongoose';
 
 const OrderSchema = new Schema(
   {
     customer: {
-      name: { type: String },
-      email: { type: String },
-      phone: { type: String },
+      name: String,
+      phone: String,
+      email: String,
+      address: String,
+      city: String,
+      postalCode: String,
     },
     items: [
       {
-        sku: String,
+        productId: String,
         name: String,
+        price: Number,
         qty: Number,
-        price: Number, // per item (IDR integer)
-        total: Number, // qty * price
+        lineTotal: Number,
+        imageUrl: String,
       },
     ],
     amounts: {
       subtotal: { type: Number, required: true },
       tax: { type: Number, default: 0 },
       shipping: { type: Number, default: 0 },
-      total: { type: Number, required: true }, // IDR integer
+      total: { type: Number, required: true },
+      currency: { type: String, default: 'IDR' },
     },
     payment: {
       provider: { type: String, default: 'manual' }, // 'xendit'
-      providerRef: { type: String, default: '' },     // invoice id
-      status: { type: String, default: 'PENDING' },   // PENDING|PAID|FAILED|CANCELLED
+      status: { type: String, default: 'PENDING' },  // PENDING|PAID|FAILED|CANCELLED
+      providerRef: { type: String, default: '' },
+      invoiceUrl: { type: String, default: '' },
+      channel: { type: String, default: '' },
+      failureReason: { type: String, default: '' },
     },
+    notes: { type: String, default: '' },
   },
   { timestamps: true }
 );
 
-export default models.Order || model('Order', OrderSchema);
+export type OrderBase = InferSchemaType<typeof OrderSchema>;
+const OrderModel = models.Order || model('Order', OrderSchema);
+export default OrderModel;
