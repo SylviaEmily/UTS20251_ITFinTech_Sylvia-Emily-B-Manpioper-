@@ -1,12 +1,17 @@
+// lib/mongodb.ts
 import mongoose from 'mongoose';
 
-type Cache = { 
-  conn: typeof mongoose | null; 
-  promise: Promise<typeof mongoose> | null; 
+type Cache = {
+  conn: typeof mongoose | null;
+  promise: Promise<typeof mongoose> | null;
 };
 
-declare global { 
-  var __mongooseCache: Cache | undefined; 
+declare global {
+  // cache koneksi mongoose agar reuse di serverless (Vercel)
+  // dan flag untuk mencegah event listener terdaftar berulang
+  // (property di global harus optional agar tidak bentrok type checking)
+  var __mongooseCache: Cache | undefined;
+  var __mongooseListenersBound: boolean | undefined;
 }
 
 function requireEnv(name: string): string {
@@ -18,78 +23,81 @@ function requireEnv(name: string): string {
 const cache: Cache = global.__mongooseCache ?? { conn: null, promise: null };
 
 export async function dbConnect(): Promise<typeof mongoose> {
-  // Jika sudah connected, return connection yang ada
-  if (cache.conn) {
-    return cache.conn;
-  }
+  // Jika sudah ada koneksi aktif, pakai ulang
+  if (cache.conn) return cache.conn;
 
-  // Jika belum ada promise connection, buat baru
+  // Jika belum ada promise koneksi, inisialisasi
   if (!cache.promise) {
     const uri = requireEnv('MONGODB_URI');
-    
-    // Optimasi configuration untuk Vercel dan MongoDB Atlas (FIXED OPTIONS)
+
+    // Opsi yang ramah Vercel + Atlas (serverless-friendly)
     const options: mongoose.ConnectOptions = {
-      // Optimasi untuk serverless environment (Vercel)
-      bufferCommands: false, // Disable buffering untuk serverless
-      maxPoolSize: 10,       // Maximum connection pool size
-      minPoolSize: 1,        // Minimum connection pool size
-      socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-      serverSelectionTimeoutMS: 30000, // Keep trying to send operations for 30 seconds
-      family: 4, // Use IPv4, skip trying IPv6
-      
-      // MongoDB Atlas specific options
+      bufferCommands: false,          // penting untuk serverless
+      maxPoolSize: 10,                // batas atas pool
+      minPoolSize: 1,                 // minimal pool
+      socketTimeoutMS: 45_000,        // tutup socket idle 45s
+      serverSelectionTimeoutMS: 30_000,
+      family: 4,                      // prefer IPv4
       retryWrites: true,
-      w: 'majority'
+      w: 'majority',
     };
 
     console.log('🔗 Connecting to MongoDB...');
-    
-    cache.promise = mongoose.connect(uri, options)
-      .then((mongooseInstance) => {
+    cache.promise = mongoose
+      .connect(uri, options)
+      .then((m) => {
         console.log('✅ MongoDB connected successfully');
-        return mongooseInstance;
+        return m;
       })
-      .catch((error) => {
-        console.error('❌ MongoDB connection error:', error);
-        // Reset cache pada error
+      .catch((err) => {
+        console.error('❌ MongoDB connection error:', err);
+        // reset agar percobaan berikutnya bisa re-init
         cache.promise = null;
-        throw error;
+        throw err;
       });
   }
 
   try {
     cache.conn = await cache.promise;
     global.__mongooseCache = cache;
-    
-    // Handle connection events untuk monitoring
-    mongoose.connection.on('connected', () => {
-      console.log('✅ Mongoose connected to MongoDB');
-    });
 
-    mongoose.connection.on('error', (err) => {
-      console.error('❌ Mongoose connection error:', err);
-    });
+    // Bind event listener sekali saja (hindari duplikasi di dev/hot-reload)
+    if (!global.__mongooseListenersBound) {
+      mongoose.connection.on('connected', () => {
+        console.log('✅ Mongoose connected to MongoDB');
+      });
 
-    mongoose.connection.on('disconnected', () => {
-      console.log('🔌 Mongoose disconnected from MongoDB');
-    });
+      mongoose.connection.on('error', (err) => {
+        console.error('❌ Mongoose connection error:', err);
+      });
 
-    // Handle graceful shutdown
-    process.on('SIGINT', async () => {
-      await mongoose.connection.close();
-      console.log('🔄 MongoDB connection closed through app termination');
-      process.exit(0);
-    });
+      mongoose.connection.on('disconnected', () => {
+        console.log('🔌 Mongoose disconnected from MongoDB');
+      });
+
+      // Catatan: Vercel Serverless tidak mengirim SIGINT seperti proses long-lived,
+      // tapi guard ini aman untuk local dev / self-hosted.
+      process.on('SIGINT', async () => {
+        try {
+          await mongoose.connection.close();
+          console.log('🔄 MongoDB connection closed through app termination');
+        } finally {
+          process.exit(0);
+        }
+      });
+
+      global.__mongooseListenersBound = true;
+    }
 
     return cache.conn;
-  } catch (error) {
-    console.error('❌ Failed to connect to MongoDB:', error);
-    cache.promise = null; // Reset cache pada error
-    throw error;
+  } catch (err) {
+    console.error('❌ Failed to connect to MongoDB:', err);
+    cache.promise = null; // reset supaya panggilan berikut bisa coba lagi
+    throw err;
   }
 }
 
-// Utility function untuk check connection status
+// Util: status koneksi (helpful untuk healthcheck/log)
 export function getConnectionStatus(): string {
   if (cache.conn) {
     return mongoose.connection.readyState === 1 ? 'connected' : 'connecting';
@@ -97,13 +105,14 @@ export function getConnectionStatus(): string {
   return 'disconnected';
 }
 
-// Utility function untuk close connection (useful for testing)
+// Util: tutup koneksi (berguna untuk testing)
 export async function dbDisconnect(): Promise<void> {
   if (cache.conn) {
     await mongoose.connection.close();
     cache.conn = null;
     cache.promise = null;
     global.__mongooseCache = undefined;
+    global.__mongooseListenersBound = undefined;
     console.log('🔌 MongoDB connection closed');
   }
 }

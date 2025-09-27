@@ -45,6 +45,12 @@ type ApiOrderResponse = {
   status: 'PENDING' | 'PAID' | 'FAILED' | 'CANCELLED';
 };
 
+// ➕ Tambahan: tipe respon invoice
+type ApiInvoiceResponse = {
+  invoiceId: string;
+  invoiceUrl: string;
+};
+
 /** ===== Hook submit order (no any) ===== */
 function useOrderSubmit(
   subtotal: number,
@@ -122,13 +128,42 @@ export default function Payment() {
   async function handleConfirmPay() {
     try {
       setStatus('processing');
+
+      // 1) Buat order
       const { orderId } = await submit(formRef.current);
+
+      // 2) Minta invoice Xendit & redirect
+      const r = await fetch('/api/payments/xendit/create-invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId }),
+      });
+
+      const text = await r.text();
+      let data: unknown;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(`Gagal parse JSON dari invoice. Status ${r.status}. Body: ${text.slice(0, 120)}...`);
+      }
+
+      if (!r.ok) {
+        const msg =
+          typeof data === 'object' && data !== null && 'message' in data
+            ? String((data as { message?: unknown }).message ?? `Gagal membuat invoice (HTTP ${r.status})`)
+            : `Gagal membuat invoice (HTTP ${r.status})`;
+        throw new Error(msg);
+      }
+
+      const inv = data as Partial<ApiInvoiceResponse>;
+      if (!inv.invoiceUrl) throw new Error('Invoice URL tidak tersedia');
+
       setStatus('success');
-      alert(`Order berhasil dibuat: ${orderId}`);
-      // window.location.href = '/thankyou/' + orderId;
+      // Redirect ke Xendit Hosted Payment Page
+      window.location.href = inv.invoiceUrl;
     } catch (e) {
       setStatus('error');
-      const msg = e instanceof Error ? e.message : 'Gagal membuat order';
+      const msg = e instanceof Error ? e.message : 'Gagal membuat order/invoice';
       alert(msg);
     }
   }
