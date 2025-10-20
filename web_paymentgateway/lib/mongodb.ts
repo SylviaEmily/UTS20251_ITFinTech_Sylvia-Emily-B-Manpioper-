@@ -10,7 +10,9 @@ declare global {
   // cache koneksi mongoose agar reuse di serverless (Vercel)
   // dan flag untuk mencegah event listener terdaftar berulang
   // (property di global harus optional agar tidak bentrok type checking)
+  // eslint-disable-next-line no-var
   var __mongooseCache: Cache | undefined;
+  // eslint-disable-next-line no-var
   var __mongooseListenersBound: boolean | undefined;
 }
 
@@ -20,6 +22,7 @@ function requireEnv(name: string): string {
   return v;
 }
 
+// pakai cache global bila ada, kalau belum ada inisialisasi baru
 const cache: Cache = global.__mongooseCache ?? { conn: null, promise: null };
 
 export async function dbConnect(): Promise<typeof mongoose> {
@@ -116,3 +119,6 @@ export async function dbDisconnect(): Promise<void> {
     console.log('🔌 MongoDB connection closed');
   }
 }
+
+// ✅ kompatibel dengan import default yang sudah ada di kode kamu
+export default dbConnect;
