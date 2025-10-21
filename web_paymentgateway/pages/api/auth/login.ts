@@ -1,37 +1,54 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import { serialize } from "cookie";
 import dbConnect from "@/lib/mongodb";
 import User from "@/models/User";
+import Otp from "@/models/Otp";
+import bcrypt from "bcryptjs";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).end();
-
-  const JWT_SECRET = process.env.JWT_SECRET ?? "";
-  if (!JWT_SECRET) return res.status(500).json({ message: "Missing JWT_SECRET" });
-
   await dbConnect();
 
-  const { email, password } = req.body as { email: string; password: string };
-  const user = await User.findOne({ email });
-  if (!user) return res.status(400).json({ message: "User not found" });
+  if (req.method !== "POST") {
+    return res.status(405).json({ message: "Method not allowed" });
+  }
 
-  const ok = await bcrypt.compare(password, user.password);
-  if (!ok) return res.status(401).json({ message: "Invalid password" });
+  const { emailOrPhone, password } = req.body;
 
-  const token = jwt.sign({ id: user._id.toString(), role: user.role }, JWT_SECRET, { expiresIn: "7d" });
+  const user = await User.findOne({
+    $or: [{ email: emailOrPhone }, { phone: emailOrPhone }],
+  });
 
-  res.setHeader(
-    "Set-Cookie",
-    serialize("token", token, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 60 * 60 * 24 * 7,
-      path: "/",
-    })
-  );
+  if (!user) return res.status(404).json({ message: "User not found" });
 
-  return res.status(200).json({ message: "Login success", role: user.role });
+  const valid = await bcrypt.compare(password, user.password);
+  if (!valid) return res.status(401).json({ message: "Invalid password" });
+
+  const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+  await Otp.create({ phone: user.phone, code: otpCode, expiresAt });
+
+  const fonnteToken = process.env.FONNTE_TOKEN ?? "";
+  if (!fonnteToken) {
+    console.error("FONNTE_TOKEN is missing in .env");
+    return res.status(500).json({ message: "Server config error" });
+  }
+
+  const response = await fetch("https://api.fonnte.com/send", {
+    method: "POST",
+    headers: {
+      Authorization: fonnteToken,
+      "Content-Type": "application/json",
+    } as HeadersInit,
+    body: JSON.stringify({
+      target: user.phone,
+      message: `Kode OTP login kamu adalah *${otpCode}*. Berlaku 5 menit.`,
+    }),
+  });
+
+  if (!response.ok) {
+    console.error("Failed to send WhatsApp OTP");
+    return res.status(500).json({ message: "Failed to send OTP" });
+  }
+
+  return res.status(200).json({ message: "OTP sent", phone: user.phone });
 }

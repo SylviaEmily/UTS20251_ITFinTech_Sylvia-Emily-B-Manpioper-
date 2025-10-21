@@ -1,11 +1,25 @@
-export default function AdminDashboard() {
-  return (
-    <div className="p-6">
-      <h1 className="text-2xl font-semibold mb-2">Admin Dashboard</h1>
-      <p className="text-sm text-gray-600">
-        (Stub) Halaman ini sudah diproteksi oleh middleware dan hanya bisa diakses role <b>admin</b>.
-      </p>
-      {/* Nanti di Tahap 2 kita isi tabel orders + grafik omzet */}
-    </div>
-  );
+// pages/admin/dashboard.tsx
+import type { GetServerSideProps } from 'next';
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = process.env.JWT_SECRET as string;
+
+export const getServerSideProps: GetServerSideProps = async ({ req }) => {
+  const token = req.cookies?.auth_token;
+  if (!token) {
+    return { redirect: { destination: '/auth/login', permanent: false } };
+  }
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as any;
+    if (payload.role !== 'admin') {
+      return { redirect: { destination: '/', permanent: false } };
+    }
+    return { props: {} };
+  } catch {
+    return { redirect: { destination: '/auth/login', permanent: false } };
+  }
+};
+
+export default function Dashboard() {
+  return <div>Dashboard Admin</div>;
 }

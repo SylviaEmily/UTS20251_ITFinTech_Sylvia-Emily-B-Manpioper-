@@ -1,20 +1,16 @@
-import jwt from "jsonwebtoken";
-import dbConnect from "@/lib/mongodb";
-import User from "@/models/User";
+// pages/api/auth/me.ts
+import type { NextApiRequest, NextApiResponse } from 'next';
+import jwt from 'jsonwebtoken';
 
-export default async function handler(req, res) {
-  if (req.method !== "GET") return res.status(405).end();
+const JWT_SECRET = process.env.JWT_SECRET as string;
 
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ message: "Missing token" });
-
-  const token = authHeader.split(" ")[1];
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const token = req.cookies?.auth_token;
+  if (!token) return res.status(401).json({ authenticated: false });
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    await dbConnect();
-    const user = await User.findById(decoded.id).select("-password");
-    res.status(200).json({ user });
-  } catch (err) {
-    res.status(401).json({ message: "Invalid token" });
+    const payload = jwt.verify(token, JWT_SECRET) as any;
+    return res.status(200).json({ authenticated: true, role: payload.role });
+  } catch {
+    return res.status(401).json({ authenticated: false });
   }
 }
