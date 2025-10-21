@@ -1,49 +1,56 @@
-import { NextResponse, NextRequest } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import jwt, { JwtPayload } from "jsonwebtoken";
 
-// Pastikan middleware dijalankan di semua route yang kamu butuh proteksi
-export function middleware(req: NextRequest) {
-  const token = req.cookies.get("token")?.value;
-  const url = req.nextUrl.pathname;
+// helper: redirect ke /login sambil membawa returnTo
+function redirectToLogin(req: NextRequest) {
+  const url = req.nextUrl.clone();
+  const returnTo = encodeURIComponent(url.pathname + url.search);
+  url.pathname = "/login";
+  url.search = `?returnTo=${returnTo}`;
+  return NextResponse.redirect(url);
+}
 
-  // Jika belum login dan mengakses /admin, arahkan ke login
-  if (url.startsWith("/admin")) {
+export function middleware(req: NextRequest) {
+  const token = req.cookies.get("token")?.value || "";
+  const path = req.nextUrl.pathname;
+
+  // Proteksi halaman ADMIN
+  if (path.startsWith("/admin")) {
     if (!token) {
-      return NextResponse.redirect(new URL("/login", req.url));
+      return redirectToLogin(req);
     }
 
-    // ✅ Pastikan JWT_SECRET tidak undefined
     const jwtSecret = process.env.JWT_SECRET;
     if (!jwtSecret) {
       console.error("Missing JWT_SECRET in environment variables");
-      return NextResponse.redirect(new URL("/login", req.url));
+      return redirectToLogin(req);
     }
 
     try {
-      const decoded = jwt.verify(token, jwtSecret) as JwtPayload;
-
+      const decoded = jwt.verify(token, jwtSecret) as JwtPayload & { role?: string };
       if (decoded.role !== "admin") {
-        // Jika bukan admin, redirect ke homepage
+        // bukan admin -> ke homepage
         return NextResponse.redirect(new URL("/", req.url));
       }
-    } catch (error) {
-      console.error("Invalid or expired token:", error);
-      return NextResponse.redirect(new URL("/login", req.url));
+    } catch (err) {
+      console.error("Invalid or expired token:", err);
+      return redirectToLogin(req);
     }
   }
 
-  // Jika URL dimulai dengan /user (misal halaman profil user), pastikan token ada
-  if (url.startsWith("/user") || url.startsWith("/checkout")) {
+  // Proteksi halaman USER (contoh: profil/checkout)
+  if (path.startsWith("/user") || path.startsWith("/checkout")) {
     if (!token) {
-      return NextResponse.redirect(new URL("/login", req.url));
+      return redirectToLogin(req);
     }
+    // token ada -> tidak cek role spesifik (user/admin boleh akses halaman umum)
   }
 
-  // Jika semua valid, lanjutkan request
+  // lanjutkan request
   return NextResponse.next();
 }
 
-// ✅ Tentukan halaman mana yang akan dilindungi
+// ✅ Halaman yang dilindungi (tetap sama)
 export const config = {
   matcher: ["/admin/:path*", "/user/:path*", "/checkout/:path*"],
 };

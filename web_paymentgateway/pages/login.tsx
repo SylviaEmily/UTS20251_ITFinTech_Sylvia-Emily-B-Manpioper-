@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useRouter } from "next/router";
 
 export default function LoginPage() {
@@ -11,6 +11,12 @@ export default function LoginPage() {
   const [phone, setPhone] = useState("");
 
   const router = useRouter();
+
+  // 👇 tambahan: baca ?returnTo=... agar bisa redirect kembali setelah OTP sukses
+  const returnTo = useMemo(() => {
+    const rt = router.query.returnTo;
+    return typeof rt === "string" ? rt : "";
+  }, [router.query.returnTo]);
 
   // === STEP 1: Kirim email/phone + password untuk mendapatkan OTP ===
   const handleLogin = async (e: React.FormEvent) => {
@@ -60,15 +66,20 @@ export default function LoginPage() {
       if (res.ok) {
         setMessage("Login berhasil! 🎉");
 
-        // Simpan token di localStorage
+        // Simpan token di localStorage (tetap), dan juga di cookie agar dibaca middleware
         localStorage.setItem("token", data.token);
+        // catatan: idealnya cookie HttpOnly diset dari server. Ini fallback agar middleware yang baca cookie tetap jalan.
+        document.cookie = `token=${data.token}; path=/; max-age=7200; samesite=lax`;
 
-        // Redirect berdasarkan role
-        if (data.role === "admin") {
-          router.push("/admin/dashboard");
-        } else {
-          router.push("/");
+        // 🔁 Redirect: utamakan returnTo jika ada
+        let dest = returnTo || (data.role === "admin" ? "/admin/dashboard" : "/");
+
+        // Lindungi: jika user biasa diarahkan ke /admin/* via returnTo, alihkan ke beranda
+        if (data.role !== "admin" && dest.startsWith("/admin")) {
+          dest = "/";
         }
+
+        router.push(dest);
       } else {
         setMessage(data.message || "Verifikasi OTP gagal");
       }
