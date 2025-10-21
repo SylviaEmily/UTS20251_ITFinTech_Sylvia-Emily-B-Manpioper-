@@ -12,11 +12,19 @@ export default function LoginPage() {
 
   const router = useRouter();
 
-  // 👇 tambahan: baca ?returnTo=... agar bisa redirect kembali setelah OTP sukses
-  const returnTo = useMemo(() => {
+  // === tambahan: ambil & DECODE ?returnTo=... agar redirect balik ke tujuan awal ===
+  const rawReturnTo = useMemo(() => {
     const rt = router.query.returnTo;
     return typeof rt === "string" ? rt : "";
   }, [router.query.returnTo]);
+
+  const decodedReturnTo = useMemo(() => {
+    try {
+      return rawReturnTo ? decodeURIComponent(rawReturnTo) : "";
+    } catch {
+      return "";
+    }
+  }, [rawReturnTo]);
 
   // === STEP 1: Kirim email/phone + password untuk mendapatkan OTP ===
   const handleLogin = async (e: React.FormEvent) => {
@@ -66,20 +74,19 @@ export default function LoginPage() {
       if (res.ok) {
         setMessage("Login berhasil! 🎉");
 
-        // Simpan token di localStorage (tetap), dan juga di cookie agar dibaca middleware
+        // simpan token (tetap seperti kode lama) + cookie agar middleware bisa membaca
         localStorage.setItem("token", data.token);
-        // catatan: idealnya cookie HttpOnly diset dari server. Ini fallback agar middleware yang baca cookie tetap jalan.
+        // NOTE: lebih aman jika server yang set HttpOnly cookie; ini fallback sementara
         document.cookie = `token=${data.token}; path=/; max-age=7200; samesite=lax`;
 
-        // 🔁 Redirect: utamakan returnTo jika ada
-        let dest = returnTo || (data.role === "admin" ? "/admin/dashboard" : "/");
+        // redirect: utamakan returnTo (yang sudah di-decode). jika tidak ada, pakai default by role
+        let dest = decodedReturnTo || (data.role === "admin" ? "/admin/dashboard" : "/");
 
-        // Lindungi: jika user biasa diarahkan ke /admin/* via returnTo, alihkan ke beranda
-        if (data.role !== "admin" && dest.startsWith("/admin")) {
-          dest = "/";
-        }
+        // proteksi sederhana: kalau user biasa diarahkan ke /admin/*, arahkan ke beranda
+        if (data.role !== "admin" && dest.startsWith("/admin")) dest = "/";
 
-        router.push(dest);
+        await router.replace(dest);
+        return;
       } else {
         setMessage(data.message || "Verifikasi OTP gagal");
       }
