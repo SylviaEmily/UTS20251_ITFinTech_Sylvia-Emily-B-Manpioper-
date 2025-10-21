@@ -4,6 +4,10 @@ import { dbConnect } from '@/lib/mongodb';
 import OrderModel, { type OrderBase } from '@/models/Order';
 import { xenditService, type XenditInvoice } from '@/lib/xendit';
 
+// ✅ ADD: import helper WhatsApp
+import { sendWhatsApp } from '@/lib/whatsapp';
+import { WA } from '@/lib/waTemplates';
+
 type CreateOrderBody = {
   customer?: {
     name?: string | null;
@@ -121,7 +125,7 @@ export default async function handler(
       const inv: XenditInvoice = await xenditService.createInvoice({
         externalID: `ORDER-${order._id}`,
         amount: total,
-        // ✅ KUNCI PERBAIKAN: jangan kirim string kosong
+        // ✅ jangan kirim string kosong
         payerEmail: toStr(body.customer?.email) || undefined,
         description: `Payment for order ${order._id}`,
         successRedirectURL: `${process.env.APP_URL}/thankyou/${order._id}`,
@@ -150,6 +154,25 @@ export default async function handler(
       order.payment.invoiceUrl = inv.invoice_url;
       order.payment.status = 'PENDING';
       await order.save();
+
+      // ✅ ADD: kirim WhatsApp notifikasi setelah invoice sukses dibuat
+      try {
+        const to = data.customer.phone || '';
+        if (to) {
+          await sendWhatsApp({
+            to,
+            message: WA.checkout({
+              name: data.customer.name || 'Customer',
+              orderId: String(order._id),
+              total,
+              invoiceUrl: inv.invoice_url,
+            }),
+          });
+        }
+      } catch (waErr) {
+        // Jangan mengganggu flow utama jika WA gagal
+        console.error('Failed to send WA checkout notif:', waErr);
+      }
 
       return res.status(201).json({
         success: true,
