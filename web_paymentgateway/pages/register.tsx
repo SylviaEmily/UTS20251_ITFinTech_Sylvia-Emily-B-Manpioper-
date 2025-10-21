@@ -1,5 +1,7 @@
+// pages/register.tsx
 import { useState } from "react";
 import { useRouter } from "next/router";
+import Link from "next/link"; // ✅ gunakan Link dari next/link
 
 type FormState = {
   name: string;
@@ -165,9 +167,9 @@ export default function RegisterPage() {
 
         <p className="text-sm text-center mt-4">
           Sudah punya akun?{" "}
-          <a href="/login" className="text-blue-600 hover:underline">
+          <Link href="/login" className="text-blue-600 hover:underline">
             Masuk di sini
-          </a>
+          </Link>
         </p>
       </div>
     </div>

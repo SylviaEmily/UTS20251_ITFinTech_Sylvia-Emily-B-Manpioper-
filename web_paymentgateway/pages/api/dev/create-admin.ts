@@ -1,22 +1,40 @@
-// pages/api/dev/create-admin.ts
+// pages/api/auth/me.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
-import bcrypt from 'bcryptjs';
-import dbConnect from '../../../lib/mongodb';
-import User from '../../../models/User';
+import jwt, { JwtPayload } from 'jsonwebtoken';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') return res.status(405).end();
-  const { email = 'admin@example.com', password = 'admin123' } = req.body ?? {};
+const JWT_SECRET = process.env.JWT_SECRET ?? '';
+
+type MeResponse =
+  | { authenticated: false }
+  | { authenticated: true; role: string };
+
+type AppJwtPayload = JwtPayload & { role?: string };
+
+function hasRole(payload: string | JwtPayload): payload is AppJwtPayload {
+  return typeof payload === 'object' && payload !== null && 'role' in payload;
+}
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<MeResponse>
+) {
+  // Secret tidak ter-set → treat seperti tidak autentik
+  if (!JWT_SECRET) {
+    return res.status(401).json({ authenticated: false });
+  }
+
+  const token = req.cookies?.auth_token;
+  if (!token) return res.status(401).json({ authenticated: false });
+
   try {
-    await dbConnect();
-    const passwordHash = await bcrypt.hash(String(password), 10);
-    const admin = await User.findOneAndUpdate(
-      { email },
-      { email, name: 'Admin', role: 'admin', passwordHash },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
-    res.status(200).json({ ok: true, email: admin.email });
-  } catch (e:any) {
-    res.status(500).json({ ok: false, error: e?.message || 'error' });
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    if (!hasRole(decoded) || !decoded.role) {
+      return res.status(401).json({ authenticated: false });
+    }
+
+    return res.status(200).json({ authenticated: true, role: decoded.role });
+  } catch {
+    return res.status(401).json({ authenticated: false });
   }
 }
