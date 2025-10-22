@@ -2,8 +2,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { dbConnect } from '@/lib/mongodb';
 import Order from '@/models/Order';
-
-// ✅ ADD: helper WhatsApp
 import { sendWhatsApp } from '@/lib/whatsapp';
 import { WA } from '@/lib/waTemplates';
 
@@ -39,6 +37,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const externalId = body?.external_id ?? '';
     const orderId = externalId.startsWith('ORDER-') ? externalId.replace('ORDER-', '') : '';
 
+    // 🔎 log ringkas payload (tanpa data sensitif)
+    console.info('[XENDIT] webhook received:', {
+      id,
+      external_id: externalId,
+      status: body?.status,
+      amount: body?.amount,
+    });
+
     if (!orderId) return res.status(400).json({ ok: false, message: 'Invalid external_id' });
 
     const order = await Order.findById(orderId);
@@ -51,36 +57,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     order.payment.providerRef = id;
     await order.save();
 
-    // ✅ ADD: Kirim WhatsApp notifikasi sesuai status (non-blocking)
+    console.info('[XENDIT] order updated:', {
+      orderId: String(order._id),
+      newStatus,
+      providerRef: id,
+    });
+
+    // ✅ Kirim WhatsApp notifikasi sesuai status (non-blocking terhadap response webhook)
     try {
       const to = order.customer?.phone || '';
       const name = order.customer?.name || 'Customer';
       const amount =
         typeof body?.amount === 'number'
           ? body.amount
-          : Number(order.amounts?.total ?? 0);
+          : Number(order.amounts?.total ?? 0); // fallback kalau Xendit tidak kirim amount
 
-      if (to) {
-        if (newStatus === 'PAID') {
-          await sendWhatsApp({
-            to,
-            message: WA.paid({
-              name,
-              orderId: String(order._id),
-              amount,
-            }),
-          });
-        } else if (newStatus === 'FAILED' || newStatus === 'CANCELLED') {
-          await sendWhatsApp({
-            to,
-            message: WA.failed({
-              name,
-              orderId: String(order._id),
-            }),
-          });
-        }
-        // PENDING: tidak perlu kirim WA di webhook
+      if (!to) {
+        console.warn('[WA] webhook notif skipped: empty phone');
+      } else if (newStatus === 'PAID') {
+        const result = await sendWhatsApp({
+          to,
+          message: WA.paid({ name, orderId: String(order._id), amount }),
+        });
+        if (!result.ok) console.error('[WA] paid notif failed:', result);
+        else console.info('[WA] paid notif sent →', to);
+      } else if (newStatus === 'FAILED' || newStatus === 'CANCELLED') {
+        const result = await sendWhatsApp({
+          to,
+          message: WA.failed({ name, orderId: String(order._id) }),
+        });
+        if (!result.ok) console.error('[WA] failed/cancelled notif failed:', result);
+        else console.info('[WA] failed/cancelled notif sent →', to);
       }
+      // PENDING: tidak perlu WA di webhook
     } catch (waErr) {
       // jangan ganggu flow webhook jika WA gagal
       console.error('Failed to send WA on webhook:', waErr);

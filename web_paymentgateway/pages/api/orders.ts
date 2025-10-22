@@ -3,8 +3,6 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { dbConnect } from '@/lib/mongodb';
 import OrderModel, { type OrderBase } from '@/models/Order';
 import { xenditService, type XenditInvoice } from '@/lib/xendit';
-
-// ✅ ADD: import helper WhatsApp
 import { sendWhatsApp } from '@/lib/whatsapp';
 import { WA } from '@/lib/waTemplates';
 
@@ -155,11 +153,13 @@ export default async function handler(
       order.payment.status = 'PENDING';
       await order.save();
 
-      // ✅ ADD: kirim WhatsApp notifikasi setelah invoice sukses dibuat
+      // ✅ SEND WA NOTIF (non-blocking terhadap flow utama)
       try {
         const to = data.customer.phone || '';
-        if (to) {
-          await sendWhatsApp({
+        if (!to) {
+          console.warn('[WA] checkout notif skipped: empty phone');
+        } else {
+          const result = await sendWhatsApp({
             to,
             message: WA.checkout({
               name: data.customer.name || 'Customer',
@@ -168,9 +168,13 @@ export default async function handler(
               invoiceUrl: inv.invoice_url,
             }),
           });
+          if (!result.ok) {
+            console.error('[WA] checkout notif failed:', result);
+          } else {
+            console.info('[WA] checkout notif sent →', to);
+          }
         }
       } catch (waErr) {
-        // Jangan mengganggu flow utama jika WA gagal
         console.error('Failed to send WA checkout notif:', waErr);
       }
 

@@ -12,30 +12,58 @@ type SendWAOptions = {
   message: string;
 };
 
-export async function sendWhatsApp({ to, message }: SendWAOptions) {
+type SendResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+async function postJSON(url: string, init: RequestInit & { timeoutMs?: number }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), init.timeoutMs ?? 10_000); // 10s
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    const text = await res.text().catch(() => "");
+    return { ok: res.ok, status: res.status, text };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function sendWhatsApp({ to, message }: SendWAOptions): Promise<SendResult> {
   const token = process.env.FONNTE_TOKEN;
   if (!token) {
-    console.error("FONNTE_TOKEN missing");
+    console.error("[WA] FONNTE_TOKEN missing");
     return { ok: false, error: "Missing token" };
   }
 
   const target = normalizePhone(to);
-  const res = await fetch("https://api.fonnte.com/send", {
-    method: "POST",
-    headers: {
-      Authorization: token, // harus string non-undefined
-      "Content-Type": "application/json",
-    } as HeadersInit,
-    body: JSON.stringify({
-      target,
-      message,
-    }),
-  });
-
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    console.error("WA send failed:", res.status, t);
-    return { ok: false, error: `HTTP ${res.status}` };
+  if (!target) {
+    console.error("[WA] Target phone is empty");
+    return { ok: false, error: "Empty phone" };
   }
-  return { ok: true };
+
+  // Retry ringan: 2 percobaan agar toleran gangguan jaringan singkat
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const r = await postJSON("https://api.fonnte.com/send", {
+        method: "POST",
+        headers: {
+          Authorization: token,
+          "Content-Type": "application/json",
+        } as HeadersInit,
+        body: JSON.stringify({ target, message }),
+        timeoutMs: 10_000,
+      });
+
+      if (!r.ok) {
+        console.error(`[WA] send failed (try ${attempt}) status=${r.status} body=${r.text}`);
+      } else {
+        console.info(`[WA] sent to ${target} (try ${attempt})`);
+        return { ok: true };
+      }
+    } catch (err) {
+      console.error(`[WA] exception (try ${attempt}):`, err);
+    }
+  }
+
+  return { ok: false, error: "Failed after retries" };
 }
