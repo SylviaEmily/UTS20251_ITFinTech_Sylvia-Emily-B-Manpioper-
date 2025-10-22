@@ -1,7 +1,8 @@
+// middleware.ts
 import { NextResponse, type NextRequest } from "next/server";
-import jwt, { JwtPayload } from "jsonwebtoken";
+import { jwtVerify } from "jose";
 
-// helper: redirect ke /login sambil membawa returnTo
+// redirect ke /login sambil membawa returnTo
 function redirectToLogin(req: NextRequest) {
   const url = req.nextUrl.clone();
   const returnTo = encodeURIComponent(url.pathname + url.search);
@@ -10,39 +11,36 @@ function redirectToLogin(req: NextRequest) {
   return NextResponse.redirect(url);
 }
 
-export function middleware(req: NextRequest) {
+async function verifyJWT(token: string, secret: string) {
+  const key = new TextEncoder().encode(secret);
+  const { payload } = await jwtVerify(token, key);
+  return payload as { role?: string };
+}
+
+export async function middleware(req: NextRequest) {
   const token = req.cookies.get("token")?.value || "";
   const path = req.nextUrl.pathname;
 
   // Proteksi halaman ADMIN
   if (path.startsWith("/admin")) {
-    if (!token) {
-      return redirectToLogin(req);
-    }
+    if (!token) return redirectToLogin(req);
 
     const jwtSecret = process.env.JWT_SECRET;
-    if (!jwtSecret) {
-      console.error("Missing JWT_SECRET in environment variables");
-      return redirectToLogin(req);
-    }
+    if (!jwtSecret) return redirectToLogin(req);
 
     try {
-      const decoded = jwt.verify(token, jwtSecret) as JwtPayload & { role?: string };
-      if (decoded.role !== "admin") {
-        // bukan admin -> ke homepage
+      const payload = await verifyJWT(token, jwtSecret);
+      if (payload.role !== "admin") {
         return NextResponse.redirect(new URL("/", req.url));
       }
-    } catch (err) {
-      console.error("Invalid or expired token:", err);
+    } catch {
       return redirectToLogin(req);
     }
   }
 
   // Proteksi halaman USER (contoh: profil/checkout)
   if (path.startsWith("/user") || path.startsWith("/checkout")) {
-    if (!token) {
-      return redirectToLogin(req);
-    }
+    if (!token) return redirectToLogin(req);
     // token ada -> tidak cek role spesifik (user/admin boleh akses halaman umum)
   }
 

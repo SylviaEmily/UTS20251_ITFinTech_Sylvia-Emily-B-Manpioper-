@@ -12,7 +12,7 @@ export default function LoginPage() {
 
   const router = useRouter();
 
-  // === tambahan: ambil & DECODE ?returnTo=... agar redirect balik ke tujuan awal ===
+  // Ambil & DECODE ?returnTo=... agar redirect balik ke tujuan awal
   const rawReturnTo = useMemo(() => {
     const rt = router.query.returnTo;
     return typeof rt === "string" ? rt : "";
@@ -26,7 +26,7 @@ export default function LoginPage() {
     }
   }, [rawReturnTo]);
 
-  // === STEP 1: Kirim email/phone + password untuk mendapatkan OTP ===
+  // STEP 1: minta OTP
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -56,7 +56,7 @@ export default function LoginPage() {
     }
   };
 
-  // === STEP 2: Verifikasi OTP ===
+  // STEP 2: verifikasi OTP (server akan set HttpOnly cookie)
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -74,15 +74,9 @@ export default function LoginPage() {
       if (res.ok) {
         setMessage("Login berhasil! 🎉");
 
-        // simpan token (tetap seperti kode lama) + cookie agar middleware bisa membaca
-        localStorage.setItem("token", data.token);
-        // NOTE: lebih aman jika server yang set HttpOnly cookie; ini fallback sementara
-        document.cookie = `token=${data.token}; path=/; max-age=7200; samesite=lax`;
-
-        // redirect: utamakan returnTo (yang sudah di-decode). jika tidak ada, pakai default by role
+        // Tidak perlu set token/cookie di client. Server sudah set HttpOnly cookie.
+        // Tentukan tujuan redirect:
         let dest = decodedReturnTo || (data.role === "admin" ? "/admin/dashboard" : "/");
-
-        // proteksi sederhana: kalau user biasa diarahkan ke /admin/*, arahkan ke beranda
         if (data.role !== "admin" && dest.startsWith("/admin")) dest = "/";
 
         await router.replace(dest);
