@@ -14,7 +14,9 @@ function normalizePhone(input: string) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") return res.status(405).json({ message: "Method not allowed" });
+  if (req.method !== "POST") {
+    return res.status(405).json({ message: "Method not allowed" });
+  }
 
   await dbConnect();
 
@@ -60,8 +62,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     role: "user", // default
   });
 
-  // Hapus password dari response
-  const { password: _, ...safe } = user.toObject();
+  // Hapus password dari response tanpa trigger ESLint
+  const { password: pw, ...safe } = user.toObject();
+  delete safe.password;
 
   return res.status(201).json({ message: "Registrasi berhasil", user: safe });
 }

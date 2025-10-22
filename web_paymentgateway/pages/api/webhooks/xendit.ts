@@ -19,13 +19,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const { id, external_id, status } = req.body as {
-      id: string; external_id: string; status: string;
+      id: string;
+      external_id: string;
+      status: string;
     };
 
     // external_id kita isi "order_<id>"
     const orderId = external_id?.replace("order_", "");
     const order = await Order.findById(orderId);
-    if (!order) return res.status(404).json({ message: "Order not found" });
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
 
     // map status Xendit -> status internal
     const map: Record<string, "PENDING" | "PAID" | "FAILED" | "CANCELLED"> = {
@@ -41,11 +45,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     order.payment.providerRef = id || order.payment.providerRef;
     await order.save();
 
-    // Notifikasi WhatsApp telah dihapus sesuai permintaan
-
     return res.status(200).json({ ok: true });
-  } catch (err: any) {
-    console.error(err);
+  } catch (err: unknown) {
+    if (err instanceof Error) {
+      console.error("Webhook error:", err.message);
+    } else {
+      console.error("Unknown error in Xendit webhook:", err);
+    }
+
     return res.status(500).json({ message: "Webhook error" });
   }
 }
