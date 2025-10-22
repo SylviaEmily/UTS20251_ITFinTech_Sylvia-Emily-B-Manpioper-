@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { useRouter } from "next/router";
 
 export default function LoginPage() {
@@ -12,21 +12,7 @@ export default function LoginPage() {
 
   const router = useRouter();
 
-  // Ambil & DECODE ?returnTo=... agar redirect balik ke tujuan awal
-  const rawReturnTo = useMemo(() => {
-    const rt = router.query.returnTo;
-    return typeof rt === "string" ? rt : "";
-  }, [router.query.returnTo]);
-
-  const decodedReturnTo = useMemo(() => {
-    try {
-      return rawReturnTo ? decodeURIComponent(rawReturnTo) : "";
-    } catch {
-      return "";
-    }
-  }, [rawReturnTo]);
-
-  // STEP 1: minta OTP
+  // === STEP 1: Kirim email/phone + password untuk mendapatkan OTP ===
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -56,7 +42,7 @@ export default function LoginPage() {
     }
   };
 
-  // STEP 2: verifikasi OTP (server akan set HttpOnly cookie)
+  // === STEP 2: Verifikasi OTP ===
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -74,13 +60,15 @@ export default function LoginPage() {
       if (res.ok) {
         setMessage("Login berhasil! 🎉");
 
-        // Tidak perlu set token/cookie di client. Server sudah set HttpOnly cookie.
-        // Tentukan tujuan redirect:
-        let dest = decodedReturnTo || (data.role === "admin" ? "/admin/dashboard" : "/");
-        if (data.role !== "admin" && dest.startsWith("/admin")) dest = "/";
+        // Simpan token di localStorage
+        localStorage.setItem("token", data.token);
 
-        await router.replace(dest);
-        return;
+        // Redirect berdasarkan role
+        if (data.role === "admin") {
+          router.push("/admin/dashboard");
+        } else {
+          router.push("/");
+        }
       } else {
         setMessage(data.message || "Verifikasi OTP gagal");
       }

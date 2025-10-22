@@ -22,11 +22,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const valid = await bcrypt.compare(password, user.password);
   if (!valid) return res.status(401).json({ message: "Invalid password" });
 
+  // Buat OTP baru
   const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 menit
 
+  // HAPUS OTP lama untuk nomor ini agar tidak bentrok
+  await Otp.deleteMany({ phone: user.phone });
+
+  // Simpan OTP terbaru
   await Otp.create({ phone: user.phone, code: otpCode, expiresAt });
 
+  // Kirim via Fonnte
   const fonnteToken = process.env.FONNTE_TOKEN ?? "";
   if (!fonnteToken) {
     console.error("FONNTE_TOKEN is missing in .env");
