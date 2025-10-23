@@ -21,6 +21,8 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-hook-form": "^7.65.0",
+    "recharts": "^3.3.0",
+    "swr": "^2.3.6",
     "xendit-node": "^7.0.0"
   },
   "devDependencies": {
