@@ -11,11 +11,11 @@ function hasRole(payload: string | JwtPayload): payload is AppJwtPayload {
 }
 
 export const getServerSideProps: GetServerSideProps = async ({ req }) => {
-  const token = req.cookies?.auth_token;
+  const token = req.cookies?.token;
 
   // Tidak ada token atau secret → paksa login
   if (!token || !JWT_SECRET) {
-    return { redirect: { destination: '/auth/login', permanent: false } };
+    return { redirect: { destination: '/login', permanent: false } };
   }
 
   try {
@@ -29,7 +29,7 @@ export const getServerSideProps: GetServerSideProps = async ({ req }) => {
     return { props: {} };
   } catch {
     // Token invalid/expired → paksa login
-    return { redirect: { destination: '/auth/login', permanent: false } };
+    return { redirect: { destination: '/login', permanent: false } };
   }
 };
 

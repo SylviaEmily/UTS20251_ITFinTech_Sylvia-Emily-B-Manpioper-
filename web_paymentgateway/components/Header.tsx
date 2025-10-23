@@ -20,27 +20,48 @@ export default function Header({ showMenu = true }: Props) {
             ☰
           </button>
         )}
-        {/* Logo dengan ukuran lebih kecil */}
-        <Image
-          src="/images/logo.png"
-          alt="Logo"
-          width={60} // misalnya 80px
-          height={30} // misalnya 30px
-          className="h-[60px] w-[60px]" // supaya rasio tetap
-        />
+        <Link href="/" className="flex items-center gap-2">
+          <Image
+            src="/images/logo.png"
+            alt="Logo"
+            width={60}
+            height={60}
+            className="h-[60px] w-[60px]"
+          />
+        </Link>
       </div>
 
-      <Link
-        href="/checkout"
-        className="relative grid h-9 w-9 place-items-center rounded-lg border"
-      >
-        🛒
-        {count > 0 && (
-          <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-black px-1 text-center text-[10px] font-semibold text-white">
-            {count}
-          </span>
-        )}
-      </Link>
+      <div className="flex items-center gap-2">
+        {/* Register & Login di header */}
+        <Link
+          href="/register"
+          className="px-3 py-2 rounded-lg border hover:bg-gray-50 text-sm"
+        >
+          Register
+        </Link>
+        <Link
+          href="/login"
+          className="px-3 py-2 rounded-lg border bg-black text-white hover:opacity-90 text-sm"
+        >
+          Login
+        </Link>
+
+        {/* Keranjang: selalu link ke /checkout.
+            Jika belum login, middleware/SSR akan redirect ke /login?from=/checkout */}
+        <Link
+          href="/checkout"
+          className="relative grid h-9 w-9 place-items-center rounded-lg border"
+          aria-label="Keranjang"
+          title="Keranjang"
+        >
+          🛒
+          {count > 0 && (
+            <span className="absolute -right-1 -top-1 min-w-[18px] rounded-full bg-black px-1 text-center text-[10px] font-semibold text-white">
+              {count}
+            </span>
+          )}
+        </Link>
+      </div>
     </div>
   );
 }
