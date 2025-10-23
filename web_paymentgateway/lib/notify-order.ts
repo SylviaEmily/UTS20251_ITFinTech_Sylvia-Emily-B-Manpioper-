@@ -4,7 +4,7 @@ import { WaTpl } from "./wa-templates";
 import { normalizePhone } from "./phone";
 import type { OrderBase } from "@/models/Order";
 
-// Item minimal yang kita butuhkan untuk format pesan
+// Minimal tipe item yang kita butuhkan untuk pesan
 type OrderItemLike = {
   name: string;
   qty: number;
@@ -12,16 +12,19 @@ type OrderItemLike = {
   price?: number;
 };
 
+// Type guard aman untuk _id (tanpa any)
+type WithId = { _id: unknown };
+function hasId(obj: unknown): obj is WithId {
+  return !!obj && typeof obj === "object" && "_id" in obj && (obj as Record<string, unknown>)._id != null;
+}
+
 /**
  * Kirim notifikasi WA ketika checkout berhasil
  */
-export async function notifyCheckout(
-  order: OrderBase | (OrderBase & { _id?: unknown })
-): Promise<void> {
+export async function notifyCheckout(order: OrderBase): Promise<void> {
   try {
     const phone = normalizePhone(order.customer?.phone ?? "");
-    // siapkan id bila ada (hindari error _id not in type)
-    const orderId = ("_id" in order && order._id != null) ? String((order as any)._id) : "";
+    const orderId = hasId(order) ? String((order as WithId)._id) : "";
 
     if (!phone) {
       console.warn("⚠️ No phone number in order:", orderId);
@@ -30,23 +33,27 @@ export async function notifyCheckout(
 
     const appName = process.env.APP_NAME || "MyApp";
 
-    // pastikan items iterable dengan bentuk yang kita kenal
-    const items = (order.items as unknown as OrderItemLike[]) ?? [];
+    // Coerce items tanpa menggunakan 'any'
+    const rawItems = Array.isArray(order.items) ? order.items : [];
+    const items: OrderItemLike[] = rawItems.map((it) => {
+      const name = (it as { name?: string }).name ?? "Item";
+      const qty = (it as { qty?: number }).qty ?? 0;
+      const price = (it as { price?: number }).price ?? 0;
+      const lineTotal = (it as { lineTotal?: number }).lineTotal;
+      return { name, qty, price, lineTotal };
+    });
 
-    // Hitung line total per item (fallback ke price * qty bila lineTotal tidak ada)
     const itemsList = items
       .map((item, idx) => {
-        const lineTotal = item.lineTotal ?? ((item.price ?? 0) * item.qty);
+        const lineTotal = item.lineTotal ?? item.price! * item.qty;
         return `${idx + 1}. ${item.name} (${item.qty}x) = Rp${lineTotal.toLocaleString("id-ID")}`;
       })
       .join("\n");
 
-    // Total order: pakai amounts.total bila ada, fallback ke penjumlahan item
     const computedTotal =
       order.amounts?.total ??
-      items.reduce((sum, it) => sum + (it.lineTotal ?? ((it.price ?? 0) * it.qty)), 0);
+      items.reduce((sum, it) => sum + (it.lineTotal ?? (it.price ?? 0) * it.qty), 0);
 
-    // Invoice URL opsional
     const invoiceUrl = order.payment?.invoiceUrl ?? "";
 
     const message = WaTpl.checkout(
