@@ -1,40 +1,27 @@
 // pages/thankyou/[id].tsx
-import { useRouter } from "next/router";
+import type { GetServerSideProps } from "next";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import dbConnect from "@/lib/mongodb";
+import Order from "@/models/Order";
+import mongoose from "mongoose";
 
-type Order = {
+/** Bentuk data yang dipakai di UI (sudah diserialisasi, aman untuk JSON) */
+type OrderSafe = {
   _id: string;
-  customer?: { name?: string; email?: string; phone?: string };
-  items?: Array<{ name: string; price: number; qty: number }>;
-  amounts?: { subtotal?: number; total?: number };
-  payment?: { status?: "PENDING" | "PAID" | "FAILED" | "CANCELLED"; providerRef?: string };
-  createdAt?: string;
+  amounts?: { total?: number } | null;
+  payment?: { status?: string } | null;
+  items?: Array<{ name: string; price: number; qty: number }> | null;
+  createdAt?: string | null;
 };
 
-export default function ThankYou() {
-  const router = useRouter();
-  const { id } = router.query;
-  const [order, setOrder] = useState<Order | null>(null);
-  const [loading, setLoading] = useState(true);
+/** Props halaman (discriminated union supaya aman saat akses) */
+type Props = { ok: true; order: OrderSafe } | { ok: false };
 
-  useEffect(() => {
-    if (!id) return;
-    (async () => {
-      try {
-        const res = await fetch(`/api/orders/${id}`);
-        const data = await res.json();
-        setOrder(data.order);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [id]);
-
-  if (loading) return <main className="p-6">Memuat…</main>;
-  if (!order) return <main className="p-6">Order tidak ditemukan.</main>;
+export default function ThankYouPage(props: Props) {
+  if (!("ok" in props) || props.ok === false) {
+    return <main className="p-6">Order tidak ditemukan.</main>;
+  }
+  const { order } = props;
 
   return (
     <main className="mx-auto max-w-3xl p-6">
@@ -48,15 +35,14 @@ export default function ThankYou() {
         ) : order.payment?.status === "FAILED" ? (
           <strong className="text-red-600">gagal.</strong>
         ) : (
-          <strong>{order.payment?.status}</strong>
+          <strong>{order.payment?.status ?? "-"}</strong>
         )}
       </p>
 
       <section className="mb-6 rounded-xl border p-4">
-        <h2 className="mb-3 font-medium">Ringkasan</h2>
         <ul className="space-y-1 text-sm">
           <li>ID Order: <span className="font-mono">{order._id}</span></li>
-          <li>Status: <strong>{order.payment?.status}</strong></li>
+          <li>Status: <strong>{order.payment?.status ?? "-"}</strong></li>
           <li>Total: <strong>Rp {(order.amounts?.total ?? 0).toLocaleString("id-ID")}</strong></li>
           <li>Waktu: {order.createdAt ? new Date(order.createdAt).toLocaleString("id-ID") : "-"}</li>
         </ul>
@@ -64,10 +50,10 @@ export default function ThankYou() {
 
       {order.items?.length ? (
         <section className="mb-6 rounded-xl border p-4">
-          <h2 className="mb-3 font-medium">Item</h2>
+          <h2 className="mb-2 font-medium">Item</h2>
           <ul className="space-y-1 text-sm">
-            {order.items.map((it, idx) => (
-              <li key={idx} className="flex justify-between">
+            {order.items.map((it, i) => (
+              <li key={i} className="flex justify-between">
                 <span>{it.name} × {it.qty}</span>
                 <span>Rp {(it.price * it.qty).toLocaleString("id-ID")}</span>
               </li>
@@ -83,3 +69,36 @@ export default function ThankYou() {
     </main>
   );
 }
+
+export const getServerSideProps: GetServerSideProps<Props> = async (ctx) => {
+  const { id } = ctx.params as { id?: string };
+  if (!id || !mongoose.isValidObjectId(id)) {
+    return { props: { ok: false } };
+  }
+
+  await dbConnect();
+
+  /** Definisikan bentuk dokumen lean agar TS tahu propertinya */
+  type OrderLean = {
+    _id: mongoose.Types.ObjectId;
+    amounts?: { total?: number } | null;
+    payment?: { status?: string } | null;
+    items?: Array<{ name: string; price: number; qty: number }> | null;
+    createdAt?: Date | string | null;
+  };
+
+  // Pakai generic di .lean<...>() untuk menghindari FlattenMaps<any>
+  const doc = await Order.findById(id).lean<OrderLean>().exec();
+
+  if (!doc) return { props: { ok: false } };
+
+  const order: OrderSafe = {
+    _id: String(doc._id),
+    amounts: doc.amounts ?? null,
+    payment: doc.payment ?? null,
+    items: doc.items ?? [],
+    createdAt: doc.createdAt ? new Date(doc.createdAt).toISOString() : null,
+  };
+
+  return { props: { ok: true, order } };
+};
