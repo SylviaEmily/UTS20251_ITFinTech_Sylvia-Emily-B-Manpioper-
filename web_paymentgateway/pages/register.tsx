@@ -1,7 +1,7 @@
 // pages/register.tsx
 import { useState } from "react";
 import { useRouter } from "next/router";
-import Link from "next/link"; // ✅ gunakan Link dari next/link
+import Link from "next/link";
 
 type FormState = {
   name: string;
@@ -9,10 +9,11 @@ type FormState = {
   phone: string;
   password: string;
   confirmPassword: string;
+  role: "user" | "admin";        // 🔹 tambah role
+  adminKey?: string;             // 🔹 secret untuk admin
 };
 
 function normalizePhoneClient(input: string) {
-  // Normalisasi ringan di sisi klien (server tetap final authority)
   let p = input.replace(/\D/g, "");
   if (p.startsWith("08")) p = "62" + p.slice(1);
   if (p.startsWith("0")) p = "62" + p.slice(1);
@@ -28,11 +29,13 @@ export default function RegisterPage() {
     phone: "",
     password: "",
     confirmPassword: "",
+    role: "user",
+    adminKey: "",
   });
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<string>("");
 
-  const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setForm((s) => ({ ...s, [name]: value }));
   };
@@ -43,10 +46,20 @@ export default function RegisterPage() {
     setSubmitting(true);
 
     try {
-      // (opsional) normalisasi nomor di klien
+      if (form.password !== form.confirmPassword) {
+        setMsg("Konfirmasi password tidak sama");
+        setSubmitting(false);
+        return;
+      }
+
       const payload = {
-        ...form,
+        name: form.name.trim(),
+        email: form.email.trim(),
         phone: normalizePhoneClient(form.phone),
+        password: form.password,
+        role: form.role,
+        // Kirim adminKey hanya kalau role=admin
+        adminKey: form.role === "admin" ? form.adminKey : undefined,
       };
 
       const res = await fetch("/api/auth/register", {
@@ -61,7 +74,6 @@ export default function RegisterPage() {
         setMsg(data.message || "Registrasi gagal");
       } else {
         setMsg("Registrasi berhasil! Mengarahkan ke halaman login…");
-        // kecilkan jeda agar UX enak
         setTimeout(() => router.push("/login"), 1200);
       }
     } catch (err) {
@@ -88,6 +100,35 @@ export default function RegisterPage() {
         )}
 
         <form onSubmit={onSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium">Role</label>
+            <select
+              name="role"
+              value={form.role}
+              onChange={onChange}
+              className="w-full border rounded-lg p-2"
+            >
+              <option value="user">User</option>
+              <option value="admin">Admin</option>
+            </select>
+            {form.role === "admin" && (
+              <div className="mt-2">
+                <label className="block text-sm font-medium">Admin Invite Key</label>
+                <input
+                  name="adminKey"
+                  value={form.adminKey}
+                  onChange={onChange}
+                  className="w-full border rounded-lg p-2"
+                  placeholder="Masukkan kunci admin"
+                  required={form.role === "admin"}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Hanya admin yang punya kunci ini. Minta ke owner/superadmin.
+                </p>
+              </div>
+            )}
+          </div>
+
           <div>
             <label className="block text-sm font-medium">Nama</label>
             <input
