@@ -5,7 +5,7 @@ import dbConnect from "@/lib/mongodb";
 import User from "@/models/User";
 
 /** Normalisasi nomor WA: 08xxxx → 628xxxx, +62 → 62 */
-function normalizePhone(input: string) {
+function normalizePhone(input: string): string {
   let p = (input || "").replace(/\D/g, "");
   if (p.startsWith("08")) p = "62" + p.slice(1);
   if (p.startsWith("0")) p = "62" + p.slice(1);
@@ -29,9 +29,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       phone,
       password,
       confirmPassword,
-      role,       // "user" | "admin" (opsional dari client)
-      adminKey,   // kunci undangan admin (opsional)
-    } = req.body as {
+      role,
+      adminKey,
+    }: {
       name: string;
       email: string;
       phone?: string;
@@ -39,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       confirmPassword?: string;
       role?: "user" | "admin";
       adminKey?: string;
-    };
+    } = req.body;
 
     // ===== VALIDASI INPUT =====
     if (!name || !email || !phone || !password) {
@@ -55,7 +55,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const normalizedPhone = normalizePhone(phone);
     const lowerEmail = email.toLowerCase().trim();
 
-    // Cek duplikat by email/phone
+    // Cek duplikat email/phone
     const existing = await User.findOne({
       $or: [{ email: lowerEmail }, { phone: normalizedPhone }],
     });
@@ -63,13 +63,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ message: "Email atau nomor sudah digunakan" });
     }
 
-    // ===== TENTUKAN ROLE DI SERVER =====
+    // ===== TENTUKAN ROLE =====
     let finalRole: "user" | "admin" = "user";
     if (role === "admin") {
       if (!ADMIN_INVITE_KEY) {
-        return res
-          .status(500)
-          .json({ message: "Server belum dikonfigurasi ADMIN_INVITE_KEY" });
+        return res.status(500).json({
+          message: "Server belum dikonfigurasi ADMIN_INVITE_KEY",
+        });
       }
       if (adminKey !== ADMIN_INVITE_KEY) {
         return res.status(403).json({ message: "Admin key tidak valid" });
@@ -77,25 +77,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       finalRole = "admin";
     }
 
-    // ===== HASH PASSWORD & SIMPAN =====
+    // ===== HASH PASSWORD =====
     const hashed = await bcrypt.hash(password, 10);
+
+    // ===== SIMPAN USER BARU =====
     const user = await User.create({
       name: name.trim(),
       email: lowerEmail,
       phone: normalizedPhone,
       password: hashed,
-      role: finalRole, // ← default user, atau admin bila key valid
+      role: finalRole,
     });
 
-    // Hapus password dari response
-    const { password: _pw, ...safe } = user.toObject();
-    delete (safe as any).password;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { password: _ignored, ...safeUser } = user.toObject() as Record<string, unknown>;
+    // hapus password secara eksplisit tanpa pakai any
+    delete safeUser.password;
 
-    return res.status(201).json({ message: "Registrasi berhasil", user: safe });
-  } catch (err: any) {
+    return res.status(201).json({ message: "Registrasi berhasil", user: safeUser });
+  } catch (err) {
     console.error(err);
-    // Handle duplicate key dari unique index
-    if (err?.code === 11000) {
+    if (typeof err === "object" && err && "code" in err && (err as { code: number }).code === 11000) {
       return res.status(400).json({ message: "Email atau nomor sudah digunakan" });
     }
     return res.status(500).json({ message: "Kesalahan server" });
