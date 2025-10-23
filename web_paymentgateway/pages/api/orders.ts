@@ -38,7 +38,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       externalID: `order_${order._id}`,
       amount: amounts.total,
       description: `Order #${order._id}`,
-      successRedirectURL: `${process.env.NEXT_PUBLIC_BASE_URL}/thankyou/${order._id}`, // ⬅️ diperbarui
+      successRedirectURL: `${process.env.NEXT_PUBLIC_BASE_URL|| 'https://uts-20251-it-fin-tech-sylvia-emily.vercel.app'}/thankyou/${order._id}`, // ⬅️ diperbarui
       failureRedirectURL: `${process.env.NEXT_PUBLIC_BASE_URL}/order/failed?id=${order._id}`,
       items: items.map((it) => ({
         name: it.name,
