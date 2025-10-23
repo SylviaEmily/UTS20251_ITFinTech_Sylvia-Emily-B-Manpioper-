@@ -33,11 +33,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     // 2️⃣ Buat invoice di Xendit
+    //    ⬇️ HANYA mengubah URL sukses ke /thankyou/<orderId>
     const invoice = await xenditService.createInvoice({
       externalID: `order_${order._id}`,
       amount: amounts.total,
       description: `Order #${order._id}`,
-      successRedirectURL: `${process.env.NEXT_PUBLIC_BASE_URL}/order/success?id=${order._id}`,
+      successRedirectURL: `${process.env.NEXT_PUBLIC_BASE_URL}/thankyou/${order._id}`, // ⬅️ diperbarui
       failureRedirectURL: `${process.env.NEXT_PUBLIC_BASE_URL}/order/failed?id=${order._id}`,
       items: items.map((it) => ({
         name: it.name,
@@ -53,12 +54,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     order.payment.providerRef = invoice.id;
     await order.save();
 
-    // 4️⃣ 🎯 KIRIM NOTIFIKASI WA CHECKOUT
+    // 4️⃣ 🎯 KIRIM NOTIFIKASI WA CHECKOUT (tetap sama)
     await notifyCheckout(order);
 
     return res.status(201).json({
       success: true,
-      orderId: order._id, // tetap mengikuti contoh implementasi
+      orderId: order._id,
       invoiceUrl: invoice.invoice_url,
     });
   } catch (err: unknown) {

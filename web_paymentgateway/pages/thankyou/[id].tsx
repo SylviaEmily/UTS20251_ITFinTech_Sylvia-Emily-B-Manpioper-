@@ -1,107 +1,85 @@
 // pages/thankyou/[id].tsx
-import Link from 'next/link';
-import type { GetServerSideProps, InferGetServerSidePropsType } from 'next';
-import { dbConnect } from '@/lib/mongodb';
-import Order from '@/models/Order';
+import { useRouter } from "next/router";
+import Link from "next/link";
+import { useEffect, useState } from "react";
 
-type PaidStatus = 'PENDING' | 'PAID' | 'FAILED' | 'CANCELLED';
-
-type PaymentLean = {
-  status?: PaidStatus;
-  providerRef?: string;
-  invoiceUrl?: string;
-};
-
-type AmountsLean = {
-  total?: number;
-  currency?: 'IDR' | string;
-};
-
-// Tipe data minimal dokumen Order saat .lean()
-type OrderLean = {
+type Order = {
   _id: string;
-  payment?: PaymentLean;
-  amounts?: AmountsLean;
+  customer?: { name?: string; email?: string; phone?: string };
+  items?: Array<{ name: string; price: number; qty: number }>;
+  amounts?: { subtotal?: number; total?: number };
+  payment?: { status?: "PENDING" | "PAID" | "FAILED" | "CANCELLED"; providerRef?: string };
+  createdAt?: string;
 };
 
-// DTO yang dipakai komponen
-type OrderDTO = {
-  _id: string;
-  payment: { status: PaidStatus; providerRef: string; invoiceUrl: string };
-  amounts: { total: number; currency: 'IDR' | string };
-};
+export default function ThankYou() {
+  const router = useRouter();
+  const { id } = router.query;
+  const [order, setOrder] = useState<Order | null>(null);
+  const [loading, setLoading] = useState(true);
 
-export default function ThankYouPage(
-  { order, forcePaid }: InferGetServerSidePropsType<typeof getServerSideProps>
-) {
-  const uiStatus: PaidStatus = forcePaid ? 'PAID' : order.payment.status;
+  useEffect(() => {
+    if (!id) return;
+    (async () => {
+      try {
+        const res = await fetch(`/api/orders/${id}`);
+        const data = await res.json();
+        setOrder(data.order);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [id]);
+
+  if (loading) return <main className="p-6">Memuat…</main>;
+  if (!order) return <main className="p-6">Order tidak ditemukan.</main>;
 
   return (
-    <main className="mx-auto max-w-2xl p-8">
-      <Link href="/" className="text-sm opacity-70">← Back to Home</Link>
-      <h1 className="mt-2 text-xl font-semibold">Terima kasih!</h1>
-
-      <section className="mt-4 rounded-xl border p-4">
-        <p className="text-sm">Order ID: <b>{order._id}</b></p>
-        <p className="mt-1 text-sm">
-          Status pembayaran: <b>{uiStatus}</b>
-          {forcePaid && (
-            <span className="ml-2 rounded bg-yellow-100 px-2 py-0.5 text-xs">
-              Simulated
-            </span>
-          )}
-        </p>
-        <p className="mt-1 text-sm">
-          Total: <b>{order.amounts.total.toLocaleString('id-ID')} {order.amounts.currency || 'IDR'}</b>
-        </p>
-        {uiStatus !== 'PAID' && (
-          <p className="mt-3 text-xs text-amber-700 bg-amber-50 p-2 rounded">
-            Pembayaran menunggu webhook Xendit. Jika kamu baru saja membayar, status
-            <b> PAID</b> akan muncul setelah webhook diterima.
-          </p>
+    <main className="mx-auto max-w-3xl p-6">
+      <h1 className="mb-2 text-2xl font-semibold">Terima kasih! 🙏</h1>
+      <p className="mb-6 text-gray-600">
+        Pembayaran untuk <span className="font-mono">#{order._id}</span>{" "}
+        {order.payment?.status === "PAID" ? (
+          <strong className="text-green-600">sudah diterima.</strong>
+        ) : order.payment?.status === "PENDING" ? (
+          <strong className="text-amber-600">masih pending.</strong>
+        ) : order.payment?.status === "FAILED" ? (
+          <strong className="text-red-600">gagal.</strong>
+        ) : (
+          <strong>{order.payment?.status}</strong>
         )}
+      </p>
+
+      <section className="mb-6 rounded-xl border p-4">
+        <h2 className="mb-3 font-medium">Ringkasan</h2>
+        <ul className="space-y-1 text-sm">
+          <li>ID Order: <span className="font-mono">{order._id}</span></li>
+          <li>Status: <strong>{order.payment?.status}</strong></li>
+          <li>Total: <strong>Rp {(order.amounts?.total ?? 0).toLocaleString("id-ID")}</strong></li>
+          <li>Waktu: {order.createdAt ? new Date(order.createdAt).toLocaleString("id-ID") : "-"}</li>
+        </ul>
       </section>
 
-      <div className="mt-4 flex gap-2">
-        <Link href={`/thankyou/${order._id}`} className="rounded border px-3 py-2 text-sm">
-          Refresh Status
-        </Link>
-        <Link href="/" className="rounded bg-black px-3 py-2 text-sm text-white">
-          Kembali ke Beranda
-        </Link>
+      {order.items?.length ? (
+        <section className="mb-6 rounded-xl border p-4">
+          <h2 className="mb-3 font-medium">Item</h2>
+          <ul className="space-y-1 text-sm">
+            {order.items.map((it, idx) => (
+              <li key={idx} className="flex justify-between">
+                <span>{it.name} × {it.qty}</span>
+                <span>Rp {(it.price * it.qty).toLocaleString("id-ID")}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      <div className="flex gap-2">
+        <Link href="/" className="rounded-lg border px-3 py-2">Kembali ke Beranda</Link>
+        <Link href="/checkout" className="rounded-lg border px-3 py-2">Lihat Keranjang</Link>
       </div>
     </main>
   );
 }
-
-export const getServerSideProps: GetServerSideProps<{
-  order: OrderDTO;
-  forcePaid: boolean;
-}> = async ({ params }) => {
-  await dbConnect();
-
-  const id = String(params?.id || '');
-  // Ambil SATU dokumen + lean dgn tipe aman (tanpa any)
-  const doc = await Order.findById(id)
-    .select('_id payment amounts')
-    .lean<OrderLean | null>();
-
-  if (!doc) return { notFound: true };
-
-  const order: OrderDTO = {
-    _id: String(doc._id),
-    payment: {
-      status: doc.payment?.status ?? 'PENDING',
-      providerRef: doc.payment?.providerRef ?? '',
-      invoiceUrl: doc.payment?.invoiceUrl ?? '',
-    },
-    amounts: {
-      total: typeof doc.amounts?.total === 'number' ? doc.amounts.total : 0,
-      currency: doc.amounts?.currency ?? 'IDR',
-    },
-  };
-
-  const forcePaid = process.env.NEXT_PUBLIC_FORCE_THANKYOU_PAID === 'true';
-
-  return { props: { order, forcePaid } };
-};
