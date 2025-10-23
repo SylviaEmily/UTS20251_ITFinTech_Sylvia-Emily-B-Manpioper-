@@ -1,45 +1,53 @@
+// pages/api/admin/stats.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongodb";
 import { requireAdmin } from "@/lib/requireAdmin";
 import Order from "@/models/Order";
 
-/**
- * Catatan: pakai updatedAt sebagai proxy kapan jadi PAID.
- * Kalau nanti ada field paidAt, cukup ganti "updatedAt" -> "paidAt".
- */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") return res.status(405).end();
   if (!requireAdmin(req, res)) return;
 
-  await dbConnect();
+  try {
+    await dbConnect();
 
-  // Hanya order PAID dihitung omzet
-  const match = { "payment.status": "PAID" };
+    // Match PAID orders only
+    const match = { "payment.status": "PAID" };
 
-  const daily = await Order.aggregate([
-    { $match: match },
-    {
-      $group: {
-        _id: { $dateToString: { date: "$updatedAt", format: "%Y-%m-%d" } },
-        total: { $sum: "$amounts.total" },
+    // Daily stats
+    const daily = await Order.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: { $dateToString: { date: "$updatedAt", format: "%Y-%m-%d" } },
+          total: { $sum: "$amounts.total" },
+        },
       },
-    },
-    { $sort: { _id: 1 } },
-  ]);
+      { $sort: { _id: 1 } },
+    ]);
 
-  const monthly = await Order.aggregate([
-    { $match: match },
-    {
-      $group: {
-        _id: { $dateToString: { date: "$updatedAt", format: "%Y-%m" } },
-        total: { $sum: "$amounts.total" },
+    // Monthly stats
+    const monthly = await Order.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: { $dateToString: { date: "$updatedAt", format: "%Y-%m" } },
+          total: { $sum: "$amounts.total" },
+        },
       },
-    },
-    { $sort: { _id: 1 } },
-  ]);
+      { $sort: { _id: 1 } },
+    ]);
 
-  res.json({
-    daily: daily.map(d => ({ date: d._id, total: d.total })),
-    monthly: monthly.map(m => ({ month: m._id, total: m.total })),
-  });
+    res.json({
+      daily: daily.map(d => ({ date: d._id, total: d.total || 0 })),
+      monthly: monthly.map(m => ({ month: m._id, total: m.total || 0 })),
+    });
+  } catch (error) {
+    console.error("Stats API error:", error);
+    res.status(500).json({ 
+      message: "Error generating stats",
+      daily: [],
+      monthly: []
+    });
+  }
 }

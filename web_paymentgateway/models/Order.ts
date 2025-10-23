@@ -1,61 +1,86 @@
-import { Schema, model, models, type InferSchemaType } from 'mongoose';
+// models/Order.ts
+import { Schema, model, models, type Model, type InferSchemaType, Types } from 'mongoose';
 
+/** Item dalam order */
+const OrderItemSchema = new Schema({
+  productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
+  name: { type: String, required: true },
+  price: { type: Number, required: true },
+  qty: { type: Number, required: true, min: 1 },
+  lineTotal: { type: Number },
+  imageUrl: { type: String, default: '' },
+}, { _id: false });
+
+/** Customer info */
+const CustomerSchema = new Schema({
+  name: { type: String, default: '' },
+  email: { type: String, default: '' },
+  phone: { type: String, default: '' },
+  userId: { type: Schema.Types.ObjectId, ref: 'User' },
+}, { _id: false });
+
+/** Skema Order - Sesuai dengan struktur existing */
 const OrderSchema = new Schema(
   {
-    customer: {
-      name: { type: String, trim: true },
-      phone: { type: String, trim: true },
-      email: { type: String, trim: true },
-      address: { type: String, trim: true },
-      city: { type: String, trim: true },
-      postalCode: { type: String, trim: true },
-    },
-    items: [
-      {
-        productId: { type: String, required: true },
-        name: { type: String, required: true },
-        price: { type: Number, required: true },
-        qty: { type: Number, required: true, min: 1 },
-        lineTotal: { type: Number, default: 0 }, // tetap ada untuk kompatibilitas
-        imageUrl: { type: String, default: '' },
-      },
-    ],
+    // Customer info
+    customer: { type: CustomerSchema, default: {} },
+    
+    // Items yang dibeli
+    items: { type: [OrderItemSchema], required: true, default: [] },
+    
+    // Amounts
     amounts: {
-      subtotal: { type: Number, required: true },
+      subtotal: { type: Number, required: true, default: 0 },
       tax: { type: Number, default: 0 },
-      shipping: { type: Number, default: 0 },
-      total: { type: Number, required: true },
-      currency: { type: String, default: 'IDR' },
+      discount: { type: Number, default: 0 },
+      total: { type: Number, required: true, default: 0 },
     },
+    
+    // Payment info
     payment: {
-      provider: { type: String, enum: ['manual', 'xendit'], default: 'manual' },
-      status: {
-        type: String,
-        enum: ['PENDING', 'PAID', 'FAILED', 'CANCELLED'],
-        default: 'PENDING',
+      method: { type: String, default: 'xendit' },
+      status: { 
+        type: String, 
+        enum: ['PENDING', 'PAID', 'FAILED', 'CANCELLED'], 
+        default: 'PENDING' 
       },
-      providerRef: { type: String, default: '' }, // akan diisi inv.id
-      invoiceUrl: { type: String, default: '' },  // akan diisi inv.invoice_url
-      channel: { type: String, default: '' },
-      failureReason: { type: String, default: '' },
+      invoiceUrl: { type: String, default: '' },
+      externalId: { type: String, default: '' },
+      paidAt: { type: Date },
     },
+    
+    // Notes
     notes: { type: String, default: '' },
   },
-  { timestamps: true }
+  { 
+    timestamps: true,
+    versionKey: '__v'
+  }
 );
 
-// Optional: jaga konsistensi jika lineTotal dipakai tempat lain (tidak memutus flow yang sudah jalan)
-OrderSchema.pre('save', function (next) {
-  if (this.isModified('items') && Array.isArray(this.items)) {
-    this.items.forEach((it: any) => {
-      if (typeof it.price === 'number' && typeof it.qty === 'number') {
-        it.lineTotal = it.price * it.qty;
-      }
-    });
-  }
-  next();
-});
+// Index untuk performa query
+OrderSchema.index({ 'payment.status': 1, createdAt: -1 });
+OrderSchema.index({ 'customer.userId': 1 });
+OrderSchema.index({ createdAt: -1 });
 
+/** Tipe data */
+export type OrderItemBase = InferSchemaType<typeof OrderItemSchema>;
+export type CustomerBase = InferSchemaType<typeof CustomerSchema>;
 export type OrderBase = InferSchemaType<typeof OrderSchema>;
-const Order = models.Order || model('Order', OrderSchema);
-export default Order;
+
+export type OrderItem = OrderItemBase & {
+  productId: Types.ObjectId;
+};
+
+export type Order = OrderBase & {
+  _id: Types.ObjectId;
+  createdAt: Date;
+  updatedAt: Date;
+  items: OrderItem[];
+};
+
+/** Model */
+const OrderModel: Model<Order> =
+  (models.Order as Model<Order>) || model<Order>('Order', OrderSchema);
+
+export default OrderModel;
