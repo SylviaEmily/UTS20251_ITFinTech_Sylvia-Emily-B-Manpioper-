@@ -21,15 +21,16 @@ export function middleware(req: NextRequest) {
   // Jika sudah login & mencoba buka /login atau /register
   if ((pathname === "/login" || pathname === "/register") && token) {
     const jwtSecret = process.env.JWT_SECRET;
-    // Jika secret tidak ada, biarkan lanjut agar halaman login/register tetap bisa jalan
     if (!jwtSecret) return NextResponse.next();
 
     try {
       const decoded = jwt.verify(token, jwtSecret) as JwtPayload;
 
-      // Jika ada ?from, biarkan page login/register menangani redirect client-side
+      // 🎯 FIX: Jika ada ?from, redirect ke sana (bukan biarkan page handle)
       const from = req.nextUrl.searchParams.get("from");
-      if (from) return NextResponse.next();
+      if (from) {
+        return NextResponse.redirect(new URL(from, req.url));
+      }
 
       // Tanpa ?from, redirect berdasarkan role
       if (decoded.role === "admin") {
