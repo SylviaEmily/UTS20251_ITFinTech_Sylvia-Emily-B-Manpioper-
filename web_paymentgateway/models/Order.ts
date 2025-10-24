@@ -46,7 +46,6 @@ const OrderSchema = new Schema(
       },
       invoiceUrl: { type: String, default: '' },
       externalId: { type: String, default: '' },
-      providerRef: { type: String, default: '' }, // ID dari payment provider (Xendit invoice.id)
       paidAt: { type: Date },
     },
     
