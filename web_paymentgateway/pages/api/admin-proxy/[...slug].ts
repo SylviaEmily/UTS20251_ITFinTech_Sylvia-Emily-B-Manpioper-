@@ -1,47 +1,56 @@
-// pages/api/admin-proxy/[...slug].ts
 import type { NextApiRequest, NextApiResponse } from "next";
 
 export const config = {
-  api: { bodyParser: false }, // supaya body dibaca mentah & diteruskan apa adanya
+  api: { bodyParser: false },
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { slug = [] } = req.query as { slug: string[] };
+  const { slug = [] } = req.query as { slug?: string[] };
   const adminKey = process.env.ADMIN_INVITE_KEY;
   if (!adminKey) {
-    return res.status(500).json({ error: "ADMIN_INVITE_KEY is not set" });
+    res.status(500).json({ error: "ADMIN_INVITE_KEY is not set" });
+    return;
   }
 
-  // rakit URL upstream, pertahankan querystring
-  const qs = new URLSearchParams(req.query as any);
-  qs.delete("slug"); // hapus param dinamis
-  const path = slug.join("/");
+  // Build upstream URL
+  const qs = new URLSearchParams(req.query as Record<string, string>);
+  qs.delete("slug");
+  const path = Array.isArray(slug) ? slug.join("/") : slug;
   const base = process.env.NEXT_PUBLIC_BASE_URL || "";
-  const upstreamUrl = `${base}/api/admin/${path}${qs.toString() ? `?${qs.toString()}` : ""}`;
+  const upstreamUrl = `${base}/api/admin/${path}${qs.size ? `?${qs.toString()}` : ""}`;
 
-  // cloning body stream (POST/PUT/PATCH)
+  // Read body if needed
   const chunks: Uint8Array[] = [];
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    for await (const chunk of req) chunks.push(chunk as Uint8Array);
+  if (req.method && !["GET", "HEAD"].includes(req.method)) {
+    for await (const chunk of req) {
+      chunks.push(chunk as Uint8Array);
+    }
   }
   const body = chunks.length ? Buffer.concat(chunks) : undefined;
 
-  // forward request ke admin api + tambahkan x-admin-key
+  // Clone headers without host
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (key.toLowerCase() === "host") continue;
+    if (typeof value === "string") headers[key] = value;
+    else if (Array.isArray(value)) headers[key] = value.join(",");
+  }
+  headers["x-admin-key"] = adminKey;
+
+  // Forward request
   const upstream = await fetch(upstreamUrl, {
     method: req.method,
-    headers: {
-      ...Object.fromEntries(Object.entries(req.headers).filter(([k]) => k !== "host")),
-      "x-admin-key": adminKey,
-    } as any,
+    headers,
     body,
   });
 
-  // forward status, headers, dan body ke client
+  // Relay response
   res.status(upstream.status);
   upstream.headers.forEach((v, k) => {
     if (k.toLowerCase() === "transfer-encoding") return;
     res.setHeader(k, v);
   });
-  const buf = Buffer.from(await upstream.arrayBuffer());
-  res.send(buf);
+
+  const buffer = Buffer.from(await upstream.arrayBuffer());
+  res.send(buffer);
 }
