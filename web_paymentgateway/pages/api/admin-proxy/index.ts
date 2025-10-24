@@ -1,4 +1,4 @@
-// pages/api/admin-proxy/[...slug].ts
+// pages/api/admin-proxy/index.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 
 /** Safely derive an error message from unknown */
@@ -25,37 +25,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return;
   }
 
-  // Build upstream base: explicit NEXT_PUBLIC_BASE_URL if provided, otherwise same origin.
   const proto = headerToString(req.headers["x-forwarded-proto"]) ?? "http";
   const host = headerToString(req.headers.host) ?? "localhost:3000";
   const base = process.env.NEXT_PUBLIC_BASE_URL || `${proto}://${host}`;
+  const upstreamUrl = `${base}/api/admin`; // list/create products
 
-  // Optional catch-all slug: [] when hitting /api/admin-proxy (no segments).
-  const slugParam = req.query.slug;
-  const slugParts: string[] = Array.isArray(slugParam) ? slugParam : [];
-  const path = slugParts.length ? `/${slugParts.join("/")}` : "";
-
-  // Reconstruct querystring (excluding "slug")
-  const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(req.query)) {
-    if (k === "slug") continue;
-    if (Array.isArray(v)) v.forEach((vv) => qs.append(k, vv));
-    else if (typeof v === "string") qs.append(k, v);
-  }
-  const query = qs.size ? `?${qs.toString()}` : "";
-
-  // Final upstream URL
-  const upstreamUrl = `${base}/api/admin${path}${query}`;
-
-  // Prepare body for non-GET/HEAD
   const method = req.method ?? "GET";
   const hasBody = !["GET", "HEAD"].includes(method);
-  const body =
-    hasBody
-      ? (typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {}))
-      : undefined;
+  const body = hasBody
+    ? (typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {}))
+    : undefined;
 
-  // Minimal headers we need; include admin key
   const headers: Record<string, string> = { "x-admin-key": ADMIN_KEY };
   if (hasBody) headers["content-type"] = "application/json";
 
@@ -67,11 +47,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       cache: "no-store",
     });
 
-    // Mirror status and stream response back
     res.status(upstream.status);
     upstream.headers.forEach((value, key) => {
-      if (key.toLowerCase() === "transfer-encoding") return;
-      res.setHeader(key, value);
+      if (key.toLowerCase() !== "transfer-encoding") {
+        res.setHeader(key, value);
+      }
     });
 
     const buf = Buffer.from(await upstream.arrayBuffer());

@@ -13,14 +13,13 @@ interface XenditWebhookBody {
   invoice_id?: string;
   invoiceId?: string;
 
-  external_id?: string;        // "order_<ObjectId>" (kita set di saat create)
+  external_id?: string;        // "order_<ObjectId>"
   externalId?: string;
   externalID?: string;
 
   status?: string;             // PAID | SETTLED | EXPIRED | FAILED | PENDING
   invoice_status?: string;
 
-  // kolom lain yang mungkin dikirim
   [key: string]: unknown;
 }
 
@@ -32,6 +31,58 @@ const STATUS_MAP: Record<string, "PENDING" | "PAID" | "FAILED" | "CANCELLED"> = 
   EXPIRED: "CANCELLED",
   FAILED: "FAILED",
 };
+
+/** Dokumen Mongoose minimal yang kita butuhkan */
+type MDoc = {
+  get(path: string): unknown;
+  set(path: string, value: unknown): unknown;
+  save(): Promise<unknown>;
+};
+
+function isMDoc(o: unknown): o is MDoc {
+  if (!o || typeof o !== "object") return false;
+  const r = o as Record<string, unknown>;
+  const g = r.get as unknown;
+  const s = r.set as unknown;
+  const sv = r.save as unknown;
+  return typeof g === "function" && typeof s === "function" && typeof sv === "function";
+}
+
+/** Pastikan shape payment lengkap sesuai schema TS kamu */
+function ensurePaymentShape(doc: MDoc): void {
+  const p = doc.get("payment");
+  if (!p || typeof p !== "object") {
+    doc.set("payment", {
+      method: "invoice",
+      status: "PENDING",
+      invoiceUrl: "",
+      externalId: "",
+      paidAt: null,
+    });
+    return;
+  }
+  const rec = p as Record<string, unknown>;
+  if (typeof rec.method !== "string") doc.set("payment.method", "invoice");
+  if (typeof rec.status !== "string") doc.set("payment.status", "PENDING");
+  if (typeof rec.invoiceUrl !== "string") doc.set("payment.invoiceUrl", "");
+  if (typeof rec.externalId !== "string") doc.set("payment.externalId", "");
+}
+
+/** Ambil total order secara aman */
+function getOrderTotal(order: unknown): number | null {
+  if (order && typeof order === "object") {
+    const amounts = (order as Record<string, unknown>)["amounts"];
+    if (amounts && typeof amounts === "object") {
+      const total = (amounts as Record<string, unknown>)["total"];
+      if (typeof total === "number") return total;
+      if (typeof total === "string") {
+        const n = Number(total);
+        if (Number.isFinite(n)) return n;
+      }
+    }
+  }
+  return null;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   await dbConnect();
@@ -48,7 +99,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // ── Ambil payload dengan tipe aman ───────────────────────────────────────────
+    // ── Ambil payload aman ─────────────────────────────────────────────────────
     const b = (req.body ?? {}) as XenditWebhookBody;
 
     const statusRaw = (b.status ?? b.invoice_status ?? "").toString();
@@ -59,61 +110,75 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ message: "Missing status" });
     }
 
-    // ── Resolve Order dari payload ──────────────────────────────────────────────
-    let order = null;
+    // ── Resolve Order ───────────────────────────────────────────────────────────
+    let orderDoc: unknown = null;
 
     // (1) external_id: "order_<ObjectId>"
     if (externalRaw && /^order_/.test(externalRaw)) {
       const maybeId = externalRaw.replace(/^order_/, "");
       if (mongoose.isValidObjectId(maybeId)) {
-        order = await Order.findById(maybeId);
+        orderDoc = await Order.findById(maybeId);
       }
     }
 
-    // (2) fallback via invoice id yang kita simpan ke payment.providerRef
-    if (!order && invoiceId) {
-      order = await Order.findOne({ "payment.providerRef": invoiceId });
+    // (2) fallback via invoice id disimpan ke payment.providerRef
+    if (!orderDoc && invoiceId) {
+      orderDoc = await Order.findOne({ "payment.providerRef": invoiceId });
     }
 
-    // (3) fallback opsional kalau kamu juga menyimpan externalId di payment
-    if (!order && externalRaw) {
-      order = await Order.findOne({ "payment.externalId": externalRaw });
+    // (3) fallback via payment.externalId (opsional)
+    if (!orderDoc && externalRaw) {
+      orderDoc = await Order.findOne({ "payment.externalId": externalRaw });
     }
 
-    if (!order) {
+    if (!orderDoc) {
       return res.status(404).json({ message: "Order not found for webhook payload" });
     }
 
-    // Pastikan struktur payment ada
-    order.payment = order.payment || { status: "PENDING" };
+    if (!isMDoc(orderDoc)) {
+      return res.status(500).json({ message: "Unexpected order document shape" });
+    }
+
+    const order = orderDoc; // now typed as MDoc
+
+    // Pastikan struktur payment lengkap
+    ensurePaymentShape(order);
 
     // ── Update status ──────────────────────────────────────────────────────────
     const incoming = statusRaw.toUpperCase();
     const newStatus = STATUS_MAP[incoming] ?? "PENDING";
-    const oldStatus = order.payment.status;
 
-    if (invoiceId) order.payment.providerRef = invoiceId;
-    order.payment.status = newStatus;
+    // old status (fallback PENDING)
+    const oldRaw = order.get("payment.status");
+    const oldStatus =
+      oldRaw === "PENDING" || oldRaw === "PAID" || oldRaw === "FAILED" || oldRaw === "CANCELLED"
+        ? oldRaw
+        : "PENDING";
+
+    if (invoiceId) order.set("payment.providerRef", invoiceId);
+    order.set("payment.status", newStatus);
     await order.save();
 
     // ── Kirim WhatsApp (non-blocking) ──────────────────────────────────────────
     try {
-      const phoneRaw = order.customer?.phone ?? "";
-      const phone = normalizePhone(phoneRaw);
+      const cust = order.get("customer") as Record<string, unknown> | null | undefined;
+      const phoneRaw = cust && typeof cust === "object" ? (cust["phone"] as string | undefined) : "";
+      const phone = normalizePhone(phoneRaw ?? "");
       const appName = process.env.APP_NAME || "MyApp";
 
       if (oldStatus !== newStatus && phone) {
         if (newStatus === "PAID") {
           const base = (process.env.APP_URL || process.env.NEXT_PUBLIC_BASE_URL || "").replace(/\/+$/, "");
-          const thankyou = `${base}/thankyou/${String(order._id)}`;
+          const thankyou = `${base}/thankyou/${String(order.get("_id"))}`;
 
-          // WaTpl.paid(appName, orderId, amount) -> 3 argumen
-          const baseMsg = WaTpl.paid(appName, String(order._id), order.amounts?.total);
+          const total = getOrderTotal(order) ?? 0;
+
+          const baseMsg = WaTpl.paid(appName, String(order.get("_id")), total);
           const msg = `${baseMsg}\n\nLihat status & rincian pesanan: ${thankyou}`;
 
           await sendWhatsApp(phone, msg);
         } else if (newStatus === "FAILED" || newStatus === "CANCELLED") {
-          const msg = WaTpl.failed(appName, String(order._id), incoming);
+          const msg = WaTpl.failed(appName, String(order.get("_id")), incoming);
           await sendWhatsApp(phone, msg);
         }
       }
@@ -124,11 +189,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     return res.status(200).json({ ok: true });
   } catch (err: unknown) {
-    // tangani unknown agar lulus no-explicit-any
-    const message =
-      typeof err === "object" && err !== null && "toString" in err
-        ? (err as { toString: () => string }).toString()
-        : "Webhook error";
+    const message = err instanceof Error ? err.message : "Webhook error";
     console.error("Webhook error:", message);
     return res.status(500).json({ message: "Webhook error" });
   }
