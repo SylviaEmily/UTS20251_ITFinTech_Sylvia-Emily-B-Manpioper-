@@ -1,4 +1,4 @@
-// pages/admin/index.tsx  (atau dashboard.tsx)
+// pages/admin/index.tsx
 import useSWR from "swr";
 import { useState } from "react";
 import {
@@ -7,7 +7,7 @@ import {
 } from "recharts";
 
 /* =========================
-   Types (hindari `any`)
+   Types
    ========================= */
 type PaymentStatus = "PENDING" | "PAID" | "FAILED" | "CANCELLED";
 
@@ -22,7 +22,7 @@ type OrderItem = {
 
 export type OrderRow = {
   _id: string;
-  createdAt: string;     // dari Mongo dikirim sebagai ISO string
+  createdAt: string;
   updatedAt: string;
   items: OrderItem[];
   subtotal: number;
@@ -51,10 +51,8 @@ type StatsResp = { daily: StatsDaily[]; monthly: StatsMonthly[] };
 /* =========================
    Utils
    ========================= */
-const authHeader = { "x-admin-key": process.env.NEXT_PUBLIC_ADMIN_KEY || "" };
-
 const fetcher = async <T,>(url: string): Promise<T> => {
-  const r = await fetch(url, { headers: authHeader });
+  const r = await fetch(url, { cache: "no-store" });
   if (!r.ok) throw new Error(`Request failed: ${r.status}`);
   return (await r.json()) as T;
 };
@@ -67,28 +65,30 @@ const idr = (n: number) =>
    ========================= */
 export default function AdminDashboard() {
   // Orders
-  const { data: ordersResp } = useSWR<ApiResult<OrderRow[]>>("/api/admin/orders?limit=100", fetcher);
+  const { data: ordersResp } =
+    useSWR<ApiResult<OrderRow[]>>("/api/admin-proxy/orders?limit=100", fetcher);
   const orders: OrderRow[] = ordersResp?.data ?? [];
 
-  // Stats
-  const { data: statsResp } = useSWR<StatsResp>("/api/admin/stats", fetcher);
+  // Stats (catatan: endpoint default hanya hitung PAID)
+  const { data: statsResp } =
+    useSWR<StatsResp>("/api/admin-proxy/stats", fetcher);
   const daily: StatsDaily[] = statsResp?.daily ?? [];
   const monthly: StatsMonthly[] = statsResp?.monthly ?? [];
 
   // Products
   const { data: productsResp, mutate: refreshProducts } =
-    useSWR<ApiResult<ProductRow[]>>("/api/admin/products", fetcher);
+    useSWR<ApiResult<ProductRow[]>>("/api/admin-proxy/products", fetcher);
   const products: ProductRow[] = productsResp?.data ?? [];
 
   // CRUD state
-  const [form, setForm] = useState<{ name: string; price: number; description: string; category: string }>({
-    name: "", price: 0, description: "", category: "All",
-  });
+  const [form, setForm] = useState<{ name: string; price: number; description: string; category: string }>(
+    { name: "", price: 0, description: "", category: "All" }
+  );
 
   async function createProduct(): Promise<void> {
-    await fetch("/api/admin/products", {
+    await fetch("/api/admin-proxy/products", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeader },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(form),
     });
     setForm({ name: "", price: 0, description: "", category: "All" });
@@ -96,16 +96,16 @@ export default function AdminDashboard() {
   }
 
   async function toggleActive(p: ProductRow): Promise<void> {
-    await fetch(`/api/admin/products/${p._id}`, {
+    await fetch(`/api/admin-proxy/products/${p._id}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json", ...authHeader },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ isActive: !p.isActive }),
     });
     void refreshProducts();
   }
 
   async function remove(id: string): Promise<void> {
-    await fetch(`/api/admin/products/${id}`, { method: "DELETE", headers: authHeader });
+    await fetch(`/api/admin-proxy/products/${id}`, { method: "DELETE" });
     void refreshProducts();
   }
 
