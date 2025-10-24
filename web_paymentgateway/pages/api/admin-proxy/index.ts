@@ -25,22 +25,34 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return;
   }
 
+  // Build absolute base URL that works on local & Vercel
   const proto = headerToString(req.headers["x-forwarded-proto"]) ?? "http";
-  const host = headerToString(req.headers.host) ?? "localhost:3000";
-  const base = process.env.NEXT_PUBLIC_BASE_URL || `${proto}://${host}`;
-  const upstreamUrl = `${base}/api/admin`; // list/create products
+  const host  = headerToString(req.headers.host) ?? "localhost:3000";
+  const base  = process.env.NEXT_PUBLIC_BASE_URL || `${proto}://${host}`;
+
+  // Build upstream URL: /api/admin + original query string
+  const target = new URL("/api/admin", base);
+  // Forward query params from the original request (if any)
+  Object.entries(req.query || {}).forEach(([k, v]) => {
+    if (Array.isArray(v)) {
+      v.forEach((vv) => target.searchParams.append(k, vv));
+    } else if (typeof v !== "undefined") {
+      target.searchParams.set(k, String(v));
+    }
+  });
 
   const method = req.method ?? "GET";
   const hasBody = !["GET", "HEAD"].includes(method);
-  const body = hasBody
-    ? (typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {}))
-    : undefined;
+  const body =
+    hasBody
+      ? (typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {}))
+      : undefined;
 
   const headers: Record<string, string> = { "x-admin-key": ADMIN_KEY };
   if (hasBody) headers["content-type"] = "application/json";
 
   try {
-    const upstream = await fetch(upstreamUrl, {
+    const upstream = await fetch(target.toString(), {
       method,
       headers,
       body,
