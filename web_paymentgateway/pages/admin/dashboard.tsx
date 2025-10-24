@@ -158,7 +158,7 @@ export default function AdminDashboard() {
       await mutateProducts(prev => ({ data: [ ...(prev?.data ?? []), temp ] }), { revalidate: false });
 
       // ✅ create via /api/admin-proxy
-      await requestJSON<ApiOne<ProductRow>>("/api/admin-proxy", {
+      await requestJSON<ApiOne<ProductRow>>("/api/admin-proxy/products", {
         method: "POST",
         body: JSON.stringify({
           name: form.name,
