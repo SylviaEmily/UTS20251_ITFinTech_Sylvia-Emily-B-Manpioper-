@@ -13,7 +13,7 @@ type UiOrderItem = {
   productId: string;
   name: string;
   price: number;
-  quantity: number;      // alias dari qty
+  quantity: number; // alias dari qty
   // biarkan properti lain ikut jika ada
   [k: string]: unknown;
 };
@@ -21,9 +21,9 @@ type UiOrderItem = {
 /** Bentuk respons yang dibutuhkan dashboard */
 interface ApiOrderRow {
   _id: string;
-  userId: string;        // <-- UI pakai ini
-  items: UiOrderItem[];  // <-- items[].quantity dipakai UI
-  totalAmount: number;   // <-- UI pakai ini
+  userId: string;       // <-- UI pakai ini
+  items: UiOrderItem[]; // <-- items[].quantity dipakai UI
+  totalAmount: number;  // <-- UI pakai ini
   paymentStatus: PaymentStatus;
   createdAt: string;
   updatedAt: string;
@@ -31,6 +31,25 @@ interface ApiOrderRow {
 
 type Success = { data: ApiOrderRow[] };
 type Fail = { message: string };
+
+// ---------- helpers ----------
+const toNumber = (v: unknown, fallback = 0): number => {
+  if (typeof v === "number") return Number.isFinite(v) ? v : fallback;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  }
+  return fallback;
+};
+
+const toStringSafe = (v: unknown, fallback = ""): string =>
+  v === undefined || v === null ? fallback : String(v);
+
+const isObjWithToObject = (x: unknown): x is { toObject: () => unknown } =>
+  typeof x === "object" &&
+  x !== null &&
+  "toObject" in x &&
+  typeof (x as Record<string, unknown>).toObject === "function";
 
 export default async function handler(
   req: NextApiRequest,
@@ -56,13 +75,23 @@ export default async function handler(
 
   // 👉 Mapping dengan alias supaya cocok dengan UI
   const data: ApiOrderRow[] = docs.map((o) => {
-    const items: UiOrderItem[] = o.items.map((it: any) => {
+    const items: UiOrderItem[] = o.items.map((it: unknown) => {
       // pastikan plain object dulu, lalu tambahkan alias quantity
-      const base = typeof it.toObject === "function" ? it.toObject() : { ...it };
+      const base: Record<string, unknown> = isObjWithToObject(it)
+        ? (it.toObject() as Record<string, unknown>)
+        : typeof it === "object" && it !== null
+        ? { ...(it as Record<string, unknown>) }
+        : {};
+
       return {
-        ...base,
-        productId: String(base.productId),
-        quantity: Number(base.qty ?? base.quantity ?? 1), // alias dari qty
+        ...base, // biarkan properti lain ikut jika ada
+        productId: toStringSafe(base.productId, ""),
+        name: toStringSafe(base.name, ""),
+        price: toNumber(base.price, 0),
+        quantity: toNumber(
+          base.qty !== undefined ? base.qty : base.quantity,
+          1
+        ), // alias dari qty
       };
     });
 
@@ -70,7 +99,7 @@ export default async function handler(
       _id: String(o._id),
       userId: o.customer?.userId ? String(o.customer.userId) : "-", // UI tampilkan userId; fallback "-"
       items,
-      totalAmount: o.amounts?.total ?? 0,                           // alias amounts.total
+      totalAmount: o.amounts?.total ?? 0, // alias amounts.total
       paymentStatus: (o.payment?.status ?? "PENDING") as PaymentStatus,
       createdAt: o.createdAt.toISOString(),
       updatedAt: o.updatedAt.toISOString(),
