@@ -3,22 +3,24 @@ import { NextResponse, NextRequest } from "next/server";
 import jwt, { JwtPayload } from "jsonwebtoken";
 
 export function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+  const { pathname, searchParams } = req.nextUrl;
   const token = req.cookies.get("token")?.value;
 
+  // ✅ tambahkan /payment sebagai route yang wajib login
   const isProtected =
     pathname.startsWith("/admin") ||
     pathname.startsWith("/checkout") ||
-    pathname.startsWith("/cart");
+    pathname.startsWith("/cart") ||
+    pathname.startsWith("/payment");
 
-  // Jika halaman dilindungi dan belum login → redirect ke /login?from=<pathname>
+  // Belum login tapi akses halaman terlindungi → arahkan ke login + bawa ?from
   if (isProtected && !token) {
     const url = new URL("/login", req.url);
-    url.searchParams.set("from", pathname);
+    url.searchParams.set("from", pathname + (req.nextUrl.search || ""));
     return NextResponse.redirect(url);
   }
 
-  // Jika sudah login & mencoba buka /login atau /register
+  // Sudah login tapi buka /login atau /register
   if ((pathname === "/login" || pathname === "/register") && token) {
     const jwtSecret = process.env.JWT_SECRET;
     if (!jwtSecret) return NextResponse.next();
@@ -26,20 +28,20 @@ export function middleware(req: NextRequest) {
     try {
       const decoded = jwt.verify(token, jwtSecret) as JwtPayload;
 
-      // 🎯 FIX: Jika ada ?from, redirect ke sana (bukan biarkan page handle)
+      // Kalau ada ?from (mis. /login?from=/checkout), kirim balik ke sana
       const from = req.nextUrl.searchParams.get("from");
       if (from) {
         return NextResponse.redirect(new URL(from, req.url));
       }
 
-      // Tanpa ?from, redirect berdasarkan role
+      // Kalau tidak ada ?from, arahkan berdasar role
       if (decoded.role === "admin") {
         return NextResponse.redirect(new URL("/admin/dashboard", req.url));
       } else {
         return NextResponse.redirect(new URL("/", req.url));
       }
     } catch {
-      // Token invalid/expired → biarkan user masuk ke halaman login/register
+      // token invalid/expired → biarkan user lanjut ke /login /register
       return NextResponse.next();
     }
   }
@@ -52,6 +54,7 @@ export const config = {
     "/admin/:path*",
     "/checkout/:path*",
     "/cart/:path*",
+    "/payment/:path*", // ✅ proteksi payment
     "/login",
     "/register",
   ],
