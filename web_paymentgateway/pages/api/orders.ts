@@ -24,6 +24,26 @@ type Ok = {
 };
 type Err = { message: string };
 
+// Minimal shapes we actually read from Xendit
+type XenditInvoice = { id: string; invoice_url: string };
+type XenditErrorBody = { message?: string };
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+function isXenditInvoice(v: unknown): v is XenditInvoice {
+  return isRecord(v) && typeof v.id === "string" && typeof v.invoice_url === "string";
+}
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return "Server error";
+  }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Ok | Err>) {
   // Preflight (kalau ada)
   if (req.method === "OPTIONS") {
@@ -64,7 +84,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       process.env.NEXT_PUBLIC_BASE_URL;
 
     const proto =
-      (req.headers["x-forwarded-proto"] as string) ||
+      (req.headers["x-forwarded-proto"] as string | undefined) ||
       (process.env.NODE_ENV === "development" ? "http" : "https");
 
     const host = req.headers.host!;
@@ -92,13 +112,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     });
 
     const text = await resp.text();
-    let data: any;
-    try { data = JSON.parse(text); } catch {
-      return res.status(502).json({ message: `Xendit tidak mengembalikan JSON. Status ${resp.status}. Body: ${text.slice(0,120)}...` });
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return res.status(502).json({
+        message: `Xendit tidak mengembalikan JSON. Status ${resp.status}. Body: ${text.slice(0, 120)}...`,
+      });
     }
+
     if (!resp.ok) {
-      return res.status(resp.status).json({ message: data?.message ?? "Gagal membuat invoice ke Xendit" });
+      const msg = (isRecord(parsed) && typeof (parsed as XenditErrorBody).message === "string")
+        ? (parsed as XenditErrorBody).message!
+        : "Gagal membuat invoice ke Xendit";
+      return res.status(resp.status).json({ message: msg });
     }
+
+    if (!isXenditInvoice(parsed)) {
+      return res.status(502).json({ message: "Format respons Xendit tidak sesuai (id/invoice_url tidak ditemukan)" });
+    }
+
+    const data = parsed; // typed as XenditInvoice
 
     // 3) Simpan info invoice di order
     order.set("payment.providerRef", data.id);
@@ -115,8 +150,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       amount,
       status: "PENDING",
     });
-  } catch (e: any) {
-    console.error("Create order error:", e);
-    return res.status(500).json({ message: e?.message ?? "Server error" });
+  } catch (err: unknown) {
+    console.error("Create order error:", err);
+    return res.status(500).json({ message: getErrorMessage(err) });
   }
 }
