@@ -1,162 +1,122 @@
-// pages/api/admin/orders.ts
+// pages/api/orders.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongodb";
-import { requireAdmin } from "@/lib/requireAdmin";
-import OrderModel from "@/models/Order";
-import { isValidObjectId, Types } from "mongoose";
+import Order from "@/models/Order";
+import { Types } from "mongoose";
 
-type OrderStatusQuery = "waiting" | "paid" | "all";
-type PaymentStatus = "PENDING" | "PAID" | "FAILED" | "CANCELLED";
-
-// ---------- Bentuk data minimal dari koleksi (hasil .lean()) ----------
-type RawOrderItem = {
-  productId?: string | number;
-  name?: string;
-  price?: number | string;
-  qty?: number | string;
-  quantity?: number | string;
-  [k: string]: unknown;
+type Item = { productId: string; name: string; price: number; qty: number; imageUrl?: string };
+type Payload = {
+  customer: { name: string; phone: string; address: string; city: string; postalCode: string; email: string };
+  items: Item[];
+  amounts: { subtotal: number; tax: number; shipping: number; total: number; currency?: "IDR" };
+  notes?: string;
 };
 
-type OrderLeanDoc = {
-  _id: Types.ObjectId;
-  customer?: { userId?: string | number } | null;
-  createdAt: Date | string;
-  updatedAt: Date | string;
-  items?: RawOrderItem[];
-  amounts?: { total?: number | string } | null;
-  payment?: { status?: PaymentStatus; invoiceUrl?: string } | null;
+type Ok = {
+  success: true;
+  orderId: string;
+  invoiceId?: string;
+  invoiceUrl?: string;
+  amount: number;
+  status: "PENDING" | "PAID" | "FAILED" | "CANCELLED";
+  needsManualPayment?: boolean;
+  message?: string;
 };
+type Err = { message: string };
 
-// ---------- Struktur respons untuk dashboard ----------
-interface ApiOrderRow {
-  _id: string;
-  userId: string;
-  createdAt: Date;
-  updatedAt: Date;
-  items: Array<{
-    productId: string;
-    name: string;
-    quantity: number;
-    price: number;
-  }>;
-  totalAmount: number;
-  paymentStatus: PaymentStatus;
-  invoiceUrl: string;
-}
-
-type Success = { data: ApiOrderRow[]; nextCursor?: string | null };
-type Fail = { message: string };
-
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse<Success | Fail>
-) {
-  // --- dukung preflight CORS jika perlu
+export default async function handler(req: NextApiRequest, res: NextApiResponse<Ok | Err>) {
+  // Preflight (kalau ada)
   if (req.method === "OPTIONS") {
-    res.setHeader("Allow", "GET, OPTIONS");
+    res.setHeader("Allow", "POST, OPTIONS");
     return res.status(204).end();
   }
-
-  if (req.method !== "GET") {
-    res.setHeader("Allow", "GET, OPTIONS");
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "POST, OPTIONS");
     return res.status(405).json({ message: "Method not allowed" });
   }
-
-  // pastikan hanya admin
-  if (!requireAdmin(req, res)) return;
 
   try {
     await dbConnect();
 
-    // --- filter status: waiting | paid | all  (dengan normalisasi)
-    const rawStatus = String(req.query.status ?? "all").toLowerCase();
-    const qStatus: OrderStatusQuery =
-      rawStatus === "waiting" || rawStatus === "paid" ? rawStatus : "all";
+    const body = req.body as Payload;
+    if (!body?.items?.length) return res.status(400).json({ message: "Items kosong" });
+    const amount = Number(body?.amounts?.total ?? 0);
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ message: "Total/amount tidak valid" });
 
-    const match: Record<string, unknown> = {};
-    if (qStatus === "waiting") match["payment.status"] = "PENDING";
-    else if (qStatus === "paid") match["payment.status"] = "PAID";
-
-    // --- limit aman 1..200
-    const rawLimit = Number(req.query.limit ?? 100);
-    const limit =
-      Number.isFinite(rawLimit) && rawLimit > 0
-        ? Math.min(Math.trunc(rawLimit), 200)
-        : 100;
-
-    // --- optional: cursor pagination (?cursor=<_id>), ambil dokumen "sebelum" cursor
-    const cursorParam = typeof req.query.cursor === "string" ? req.query.cursor : null;
-    if (cursorParam && isValidObjectId(cursorParam)) {
-      match._id = { $lt: new Types.ObjectId(cursorParam) };
-    }
-
-    // --- ambil dokumen dengan projection secukupnya
-    const docs: OrderLeanDoc[] = await OrderModel.find(match, {
-      _id: 1,
-      "customer.userId": 1,
-      createdAt: 1,
-      updatedAt: 1,
-      items: 1,
-      amounts: 1,
-      payment: 1,
-    })
-      .sort({ _id: -1 }) // gunakan _id untuk pagination stabil
-      .limit(limit + 1) // ambil 1 ekstra untuk lihat "hasMore"
-      .lean<OrderLeanDoc[]>()
-      .exec();
-
-    const hasMore = docs.length > limit;
-    const slice = hasMore ? docs.slice(0, limit) : docs;
-
-    // util konversi
-    const toNumber = (v: unknown, fallback = 0): number => {
-      if (typeof v === "number") return Number.isFinite(v) ? v : fallback;
-      if (typeof v === "string") {
-        const n = Number(v);
-        return Number.isFinite(n) ? n : fallback;
-      }
-      return fallback;
-    };
-
-    const toDate = (v: Date | string): Date => (v instanceof Date ? v : new Date(v));
-
-    const data: ApiOrderRow[] = slice.map((o): ApiOrderRow => {
-      const itemsArr = Array.isArray(o.items) ? o.items : [];
-
-      const items = itemsArr.map((item) => {
-        const productId = String(item.productId ?? "");
-        const name = String(item.name ?? "");
-        const price = toNumber(item.price, 0);
-        const quantity = toNumber(
-          item.qty !== undefined ? item.qty : item.quantity,
-          0
-        );
-        return { productId, name, price, quantity };
-      });
-
-      return {
-        _id: String(o._id),
-        userId: String(o?.customer?.userId ?? o._id),
-        createdAt: toDate(o.createdAt),
-        updatedAt: toDate(o.updatedAt),
-        items,
-        totalAmount: toNumber(o?.amounts?.total, 0),
-        paymentStatus: (o?.payment?.status ?? "PENDING") as PaymentStatus,
-        invoiceUrl: String(o?.payment?.invoiceUrl ?? ""),
-      };
+    // 1) Simpan order (status awal PENDING)
+    const order = await Order.create({
+      customer: body.customer,
+      items: body.items.map(i => ({
+        productId: i.productId, name: i.name, price: i.price, qty: i.qty, imageUrl: i.imageUrl
+      })),
+      amounts: body.amounts,
+      notes: body.notes ?? null,
+      payment: { status: "PENDING" },
     });
 
-    // nextCursor untuk “Load more” di dashboard
-    const nextCursor = hasMore ? String(slice[slice.length - 1]._id) : null;
+    // 2) Buat invoice Xendit
+    const externalId = `order-${(order._id as Types.ObjectId).toHexString()}`;
 
-    return res.status(200).json({ data, nextCursor });
-  } catch (err: unknown) {
-    const message =
-      typeof err === "object" && err !== null && "message" in err
-        ? String((err as { message?: unknown }).message ?? "Error fetching orders")
-        : "Error fetching orders";
-    console.error("Orders API error:", err);
-    return res.status(500).json({ message });
+    // ==== FIX: tentukan origin yang benar (dev = http, prod = https, env > header) ====
+    const originFromEnv =
+      process.env.APP_BASE_URL ||
+      process.env.APP_URL ||
+      process.env.NEXT_PUBLIC_BASE_URL;
+
+    const proto =
+      (req.headers["x-forwarded-proto"] as string) ||
+      (process.env.NODE_ENV === "development" ? "http" : "https");
+
+    const host = req.headers.host!;
+    const baseUrl = (originFromEnv || `${proto}://${host}`).replace(/\/+$/, "");
+
+    // ==== FIX: thank-you -> thankyou dan pakai path param ====
+    const successUrl = `${baseUrl}/thankyou/${order._id}`;
+    const failureUrl = `${baseUrl}/payment?order=${order._id}&failed=1`;
+
+    const resp = await fetch("https://api.xendit.co/v2/invoices", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        // Basic auth: username = SECRET KEY, password kosong
+        Authorization: "Basic " + Buffer.from(`${process.env.XENDIT_SECRET_KEY}:`).toString("base64"),
+      },
+      body: JSON.stringify({
+        external_id: externalId,
+        amount,
+        currency: "IDR",
+        description: `Pembayaran Pesanan #${order._id}`,
+        success_redirect_url: successUrl,
+        failure_redirect_url: failureUrl,
+      }),
+    });
+
+    const text = await resp.text();
+    let data: any;
+    try { data = JSON.parse(text); } catch {
+      return res.status(502).json({ message: `Xendit tidak mengembalikan JSON. Status ${resp.status}. Body: ${text.slice(0,120)}...` });
+    }
+    if (!resp.ok) {
+      return res.status(resp.status).json({ message: data?.message ?? "Gagal membuat invoice ke Xendit" });
+    }
+
+    // 3) Simpan info invoice di order
+    order.set("payment.providerRef", data.id);
+    order.set("payment.invoiceUrl", data.invoice_url);
+    order.set("payment.externalId", externalId);
+    order.set("payment.status", "PENDING");
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      orderId: String(order._id),
+      invoiceId: data.id,
+      invoiceUrl: data.invoice_url,
+      amount,
+      status: "PENDING",
+    });
+  } catch (e: any) {
+    console.error("Create order error:", e);
+    return res.status(500).json({ message: e?.message ?? "Server error" });
   }
 }

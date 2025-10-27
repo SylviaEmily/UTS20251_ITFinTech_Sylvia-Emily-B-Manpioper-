@@ -42,10 +42,7 @@ type MDoc = {
 function isMDoc(o: unknown): o is MDoc {
   if (!o || typeof o !== "object") return false;
   const r = o as Record<string, unknown>;
-  const g = r.get as unknown;
-  const s = r.set as unknown;
-  const sv = r.save as unknown;
-  return typeof g === "function" && typeof s === "function" && typeof sv === "function";
+  return typeof r.get === "function" && typeof r.set === "function" && typeof r.save === "function";
 }
 
 /** Pastikan shape payment lengkap sesuai schema TS kamu */
@@ -74,7 +71,7 @@ function getOrderTotal(order: unknown): number | null {
     const amounts = (order as Record<string, unknown>)["amounts"];
     if (amounts && typeof amounts === "object") {
       const total = (amounts as Record<string, unknown>)["total"];
-      if (typeof total === "number") return total;
+      if (typeof total === "number") return Number.isFinite(total) ? total : null;
       if (typeof total === "string") {
         const n = Number(total);
         if (Number.isFinite(n)) return n;
@@ -85,18 +82,25 @@ function getOrderTotal(order: unknown): number | null {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  await dbConnect();
+  // Dukung preflight bila ada
+  if (req.method === "OPTIONS") {
+    res.setHeader("Allow", "POST, OPTIONS");
+    return res.status(204).end();
+  }
 
   if (req.method !== "POST") {
+    res.setHeader("Allow", "POST, OPTIONS");
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  // Validasi token callback
+  // Validasi token callback lebih dulu (hindari koneksi DB jika token salah)
   const rawTokenHeader = req.headers["x-callback-token"];
   const tokenHeader = Array.isArray(rawTokenHeader) ? rawTokenHeader[0] : rawTokenHeader;
   if (!process.env.XENDIT_CALLBACK_TOKEN || tokenHeader !== process.env.XENDIT_CALLBACK_TOKEN) {
     return res.status(401).json({ message: "Invalid callback token" });
   }
+
+  await dbConnect();
 
   try {
     // ── Ambil payload aman ─────────────────────────────────────────────────────
@@ -110,36 +114,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ message: "Missing status" });
     }
 
-    // ── Resolve Order ───────────────────────────────────────────────────────────
-    let orderDoc: unknown = null;
+        // ── Resolve Order ───────────────────────────────────────────────────────────
+    // Simplify the order lookup section:
+    let orderDoc = null;
 
-    // (1) external_id: "order_<ObjectId>"
-    if (externalRaw && /^order_/.test(externalRaw)) {
-      const maybeId = externalRaw.replace(/^order_/, "");
-      if (mongoose.isValidObjectId(maybeId)) {
-        orderDoc = await Order.findById(maybeId);
-      }
+    // Method 1: Find by external_id (most reliable)
+    if (externalRaw) {
+        const orderId = externalRaw.replace(/^order[-_]/, ''); // Handle both order_ and order-
+        if (mongoose.isValidObjectId(orderId)) {
+            orderDoc = await Order.findById(orderId);
+        }
     }
 
-    // (2) fallback via invoice id disimpan ke payment.providerRef
+    // Method 2: Fallback - find by invoice ID
     if (!orderDoc && invoiceId) {
-      orderDoc = await Order.findOne({ "payment.providerRef": invoiceId });
-    }
-
-    // (3) fallback via payment.externalId (opsional)
-    if (!orderDoc && externalRaw) {
-      orderDoc = await Order.findOne({ "payment.externalId": externalRaw });
+        orderDoc = await Order.findOne({ "payment.providerRef": invoiceId });
     }
 
     if (!orderDoc) {
-      return res.status(404).json({ message: "Order not found for webhook payload" });
+        console.error(`Order not found for external_id: ${externalRaw}, invoice_id: ${invoiceId}`);
+        return res.status(404).json({ message: "Order not found" });
     }
-
     if (!isMDoc(orderDoc)) {
       return res.status(500).json({ message: "Unexpected order document shape" });
     }
 
-    const order = orderDoc; // now typed as MDoc
+    const order = orderDoc as MDoc;
 
     // Pastikan struktur payment lengkap
     ensurePaymentShape(order);
@@ -148,11 +148,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const incoming = statusRaw.toUpperCase();
     const newStatus = STATUS_MAP[incoming] ?? "PENDING";
 
-    // old status (fallback PENDING)
     const oldRaw = order.get("payment.status");
     const oldStatus =
       oldRaw === "PENDING" || oldRaw === "PAID" || oldRaw === "FAILED" || oldRaw === "CANCELLED"
-        ? oldRaw
+        ? (oldRaw as "PENDING" | "PAID" | "FAILED" | "CANCELLED")
         : "PENDING";
 
     if (invoiceId) order.set("payment.providerRef", invoiceId);
@@ -168,11 +167,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (oldStatus !== newStatus && phone) {
         if (newStatus === "PAID") {
-          const base = (process.env.APP_URL || process.env.NEXT_PUBLIC_BASE_URL || "").replace(/\/+$/, "");
-          const thankyou = `${base}/thankyou/${String(order.get("_id"))}`;
+          // Base URL yang konsisten
+          const base =
+            (process.env.APP_BASE_URL ||
+              process.env.APP_URL ||
+              process.env.NEXT_PUBLIC_BASE_URL ||
+              `https://${req.headers.host}`)!.replace(/\/+$/, "");
+          // Samakan dengan flow create-invoice: /thank-you?order=<id>
+          const thankyou = `${base}/thank-you?order=${String(order.get("_id"))}`;
 
           const total = getOrderTotal(order) ?? 0;
-
           const baseMsg = WaTpl.paid(appName, String(order.get("_id")), total);
           const msg = `${baseMsg}\n\nLihat status & rincian pesanan: ${thankyou}`;
 
@@ -194,3 +198,4 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ message: "Webhook error" });
   }
 }
+
