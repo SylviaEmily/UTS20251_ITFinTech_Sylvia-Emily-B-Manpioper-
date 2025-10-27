@@ -1,177 +1,111 @@
-// pages/api/webhooks/xendit.ts
+// pages/api/admin/orders.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import dbConnect from "@/lib/mongodb";
-import Order from "@/models/Order";
-import mongoose, { Types } from "mongoose";
-import { sendWhatsApp } from "@/lib/wa";
-import { WaTpl } from "@/lib/wa-templates";
-import { normalizePhone } from "@/lib/phone";
+import { requireAdmin } from "@/lib/requireAdmin";
+import OrderModel from "@/models/Order";
+import { isValidObjectId, Types } from "mongoose";
 
-/** Payload Xendit (cover snake/camel) */
-interface XenditWebhookBody {
-  id?: string;                 // invoice id
-  invoice_id?: string;
-  invoiceId?: string;
-
-  external_id?: string;        // "order_<ObjectId>" (kita set saat create)
-  externalId?: string;
-  externalID?: string;
-
-  status?: string;             // PAID | SETTLED | EXPIRED | FAILED | PENDING
-  invoice_status?: string;
-
-  [key: string]: unknown;
-}
-
-/** Payment minimal yang dipakai di webhook */
+type OrderStatusQuery = "waiting" | "paid" | "all";
 type PaymentStatus = "PENDING" | "PAID" | "FAILED" | "CANCELLED";
-interface PaymentShape {
-  status: PaymentStatus;
-  providerRef?: string;
-  externalId?: string;
-  notifPaidSent?: boolean;
+
+// Struktur yang diharapkan dashboard
+interface ApiOrderRow {
+  _id: string;
+  userId: string;
+  createdAt: Date;
+  updatedAt: Date;
+  items: Array<{
+    productId: string;
+    name: string;
+    quantity: number;
+    price: number;
+  }>;
+  totalAmount: number;
+  paymentStatus: PaymentStatus;
+  invoiceUrl: string;
 }
 
-/** Bentuk dokumen order (lean) yang kita butuhkan */
-interface OrderLean {
-  _id: Types.ObjectId;
-  customer?: { phone?: string | null };
-  amounts?: { total?: number | null };
-  payment?: PaymentShape;
-}
+type Success = { data: ApiOrderRow[]; nextCursor?: string | null };
+type Fail = { message: string };
 
-const STATUS_MAP: Record<string, PaymentStatus> = {
-  PENDING: "PENDING",
-  PAID: "PAID",
-  SETTLED: "PAID",
-  EXPIRED: "CANCELLED",
-  FAILED: "FAILED",
-};
-
-const toNumber = (v: unknown, fallback = 0): number =>
-  typeof v === "number" && Number.isFinite(v) ? v : fallback;
-
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  await dbConnect();
-
-  if (req.method !== "POST") {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse<Success | Fail>
+) {
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  // Validasi token callback
-  const rawTokenHeader = req.headers["x-callback-token"];
-  const tokenHeader = Array.isArray(rawTokenHeader) ? rawTokenHeader[0] : rawTokenHeader;
-  if (!process.env.XENDIT_CALLBACK_TOKEN || tokenHeader !== process.env.XENDIT_CALLBACK_TOKEN) {
-    return res.status(401).json({ message: "Invalid callback token" });
-  }
+  if (!requireAdmin(req, res)) return;
 
   try {
-    const b = (req.body ?? {}) as XenditWebhookBody;
+    await dbConnect();
 
-    const statusRaw = (b.status ?? b.invoice_status ?? "").toString();
-    const externalRaw = (b.external_id ?? b.externalId ?? b.externalID ?? "").toString();
-    const invoiceId = (b.id ?? b.invoice_id ?? b.invoiceId ?? "").toString();
+    // --- filter status: waiting | paid | all
+    const qStatus = String(req.query.status ?? "all") as OrderStatusQuery;
+    const match: Record<string, unknown> = {};
+    if (qStatus === "waiting") match["payment.status"] = "PENDING";
+    else if (qStatus === "paid") match["payment.status"] = "PAID";
 
-    if (!statusRaw) {
-      return res.status(400).json({ message: "Missing status" });
+    // --- limit aman 1..200
+    const rawLimit = Number(req.query.limit ?? 100);
+    const limit = Number.isFinite(rawLimit)
+      ? Math.min(Math.max(Math.trunc(rawLimit), 1), 200)
+      : 100;
+
+    // --- optional: cursor pagination (?cursor=<_id>), ambil dokumen "sebelum" cursor
+    const cursorParam = typeof req.query.cursor === "string" ? req.query.cursor : null;
+    if (cursorParam && isValidObjectId(cursorParam)) {
+      match._id = { $lt: new Types.ObjectId(cursorParam) };
     }
 
-    // ===== Resolve order (lean) + orderId =====
-    let orderDoc: OrderLean | null = null;
-    let orderId: Types.ObjectId | null = null;
-
-    // (1) external_id: "order_<ObjectId>"
-    if (externalRaw && /^order_/.test(externalRaw)) {
-      const maybe = externalRaw.replace(/^order_/, "");
-      if (mongoose.isValidObjectId(maybe)) {
-        orderDoc = await Order.findById(maybe).lean<OrderLean>().exec();
-        if (orderDoc) orderId = orderDoc._id;
+    // --- ambil dokumen dengan projection secukupnya
+    const docs = await OrderModel.find(
+      match,
+      {
+        _id: 1,
+        "customer.userId": 1,
+        createdAt: 1,
+        updatedAt: 1,
+        items: 1,
+        amounts: 1,
+        payment: 1,
       }
-    }
+    )
+      .sort({ _id: -1 })          // gunakan _id untuk pagination stabil
+      .limit(limit + 1)           // ambil 1 ekstra untuk lihat "hasMore"
+      .lean()
+      .exec();
 
-    // (2) via invoice id (payment.providerRef)
-    if (!orderDoc && invoiceId) {
-      orderDoc = await Order.findOne({ "payment.providerRef": invoiceId })
-        .lean<OrderLean>()
-        .exec();
-      if (orderDoc) orderId = orderDoc._id;
-    }
+    const hasMore = docs.length > limit;
+    const slice = hasMore ? docs.slice(0, limit) : docs;
 
-    // (3) via payment.externalId (opsional jika kamu simpan saat create)
-    if (!orderDoc && externalRaw) {
-      orderDoc = await Order.findOne({ "payment.externalId": externalRaw })
-        .lean<OrderLean>()
-        .exec();
-      if (orderDoc) orderId = orderDoc._id;
-    }
+    const data: ApiOrderRow[] = slice.map((o: any): ApiOrderRow => ({
+      _id: String(o._id),
+      userId: String(o?.customer?.userId ?? o._id),
+      createdAt: o.createdAt,
+      updatedAt: o.updatedAt,
+      items: (o.items ?? []).map((item: any) => ({
+        productId: String(item.productId),
+        name: item.name,
+        // konsisten dgn orders.ts (qty), tapi tetap aman kalau ada field "quantity"
+        quantity: Number(item.qty ?? item.quantity ?? 0),
+        price: Number(item.price ?? 0),
+      })),
+      totalAmount: Number(o?.amounts?.total ?? 0),
+      paymentStatus: (o?.payment?.status ?? "PENDING") as PaymentStatus,
+      invoiceUrl: String(o?.payment?.invoiceUrl ?? ""),
+    }));
 
-    if (!orderDoc || !orderId) {
-      return res.status(404).json({ message: "Order not found for webhook payload" });
-    }
+    // nextCursor untuk “Load more” di dashboard
+    const nextCursor = hasMore ? String(slice[slice.length - 1]._id) : null;
 
-    // ===== Hitung status baru & siapkan update =====
-    const incoming = statusRaw.toUpperCase();
-    const newStatus: PaymentStatus = STATUS_MAP[incoming] ?? "PENDING";
-    const oldStatus: PaymentStatus = (orderDoc.payment?.status ?? "PENDING") as PaymentStatus;
-    const alreadySent: boolean = Boolean(orderDoc.payment?.notifPaidSent);
-
-    // set dasar
-    const setFields: Record<string, unknown> = {
-      "payment.status": newStatus,
-    };
-    if (invoiceId) setFields["payment.providerRef"] = invoiceId;
-
-    // update status terlebih dulu
-    await Order.updateOne({ _id: orderId }, { $set: setFields }).exec();
-
-    // ===== Kirim WA (non-blocking) hanya saat pertama kali PAID =====
-    try {
-      const phoneRaw = orderDoc.customer?.phone ?? "";
-      const phone = normalizePhone(phoneRaw);
-      const appName = process.env.APP_NAME || "MyApp";
-
-      if (newStatus === "PAID" && phone && !alreadySent) {
-        const base = (process.env.APP_URL || process.env.NEXT_PUBLIC_BASE_URL || "").replace(/\/+$/, "");
-        const thankyou = `${base}/thankyou/${String(orderId)}`;
-
-        const totalAmount = toNumber(orderDoc.amounts?.total, 0);
-        const baseMsg = WaTpl.paid(appName, String(orderId), totalAmount);
-        const msg = `${baseMsg}\n\nLihat status & rincian pesanan: ${thankyou}`;
-
-        console.log("WA SEND →", { to: phone, preview: msg.slice(0, 100) });
-        await sendWhatsApp(phone, msg);
-
-        // tandai sudah kirim agar tidak dobel saat resend
-        await Order.updateOne(
-          { _id: orderId },
-          { $set: { "payment.notifPaidSent": true } }
-        ).exec();
-
-        console.log("WA RESULT ← success");
-      } else if ((newStatus === "FAILED" || newStatus === "CANCELLED") && phone) {
-        const msg = WaTpl.failed(appName, String(orderId), incoming);
-        console.log("WA SEND (fail/cancel) →", { to: phone });
-        await sendWhatsApp(phone, msg);
-      } else {
-        console.log("WA SKIPPED →", {
-          phoneExists: Boolean(phone),
-          newStatus,
-          alreadySent,
-          oldStatus,
-        });
-      }
-    } catch (waErr) {
-      console.error("WA send error:", waErr);
-      // jangan gagalkan webhook
-    }
-
-    return res.status(200).json({ ok: true });
-  } catch (err: unknown) {
-    const message =
-      typeof err === "object" && err !== null && "toString" in err
-        ? (err as { toString: () => string }).toString()
-        : "Webhook error";
-    console.error("Webhook error:", message);
-    return res.status(500).json({ message: "Webhook error" });
+    return res.status(200).json({ data, nextCursor });
+  } catch (error: any) {
+    console.error("Orders API error:", error);
+    return res.status(500).json({
+      message: error?.message ?? "Error fetching orders",
+    });
   }
 }

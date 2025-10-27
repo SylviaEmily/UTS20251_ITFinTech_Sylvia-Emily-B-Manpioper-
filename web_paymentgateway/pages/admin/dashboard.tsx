@@ -1,4 +1,4 @@
-// pages/admin/dashboard.tsx
+// pages/admin/dashboard.tsx - WITH DEBUG INFO (fixed)
 import useSWR from "swr";
 import { useMemo, useState } from "react";
 import {
@@ -47,7 +47,7 @@ type StatsMonthly = { month: string; total: number };
 type StatsResp = { daily: StatsDaily[]; monthly: StatsMonthly[] };
 
 /* =========================
-   Stable empty fallbacks (hindari referensi baru)
+   Stable empty fallbacks
    ========================= */
 const EMPTY_ORDERS: OrderRow[] = [];
 const EMPTY_PRODUCTS: ProductRow[] = [];
@@ -57,8 +57,6 @@ const EMPTY_MONTHLY: StatsMonthly[] = [];
 /* =========================
    Utils
    ========================= */
-
-// Safely extract error message from unknown JSON
 const getErrMsg = (body: unknown): string | null => {
   if (body && typeof body === "object") {
     const rec = body as Record<string, unknown>;
@@ -70,13 +68,22 @@ const getErrMsg = (body: unknown): string | null => {
   return null;
 };
 
-// Generic JSON fetcher untuk SWR
 const swrJSON = async <T,>(url: string): Promise<T> => {
+  console.log("🔵 Fetching:", url); // DEBUG
   const r = await fetch(url, { cache: "no-store" });
+  console.log("🔵 Response status:", r.status, r.statusText); // DEBUG
+  
   let body: unknown = null;
-  try { body = await r.json(); } catch { /* ignore */ }
+  try { 
+    body = await r.json(); 
+    console.log("🔵 Response body:", body); // DEBUG
+  } catch (e) { 
+    console.error("❌ JSON parse error:", e); // DEBUG
+  }
+  
   if (!r.ok) {
     const msg = getErrMsg(body) ?? `Request failed: ${r.status}`;
+    console.error("❌ Request failed:", msg, body); // DEBUG
     throw new Error(msg);
   }
   return body as T;
@@ -90,7 +97,7 @@ const idr = (n: number) =>
    ========================= */
 export default function AdminDashboard() {
   /* -------- Orders -------- */
-  const { data: ordersResp, error: ordersErr } =
+  const { data: ordersResp, error: ordersErr, isLoading: ordersLoading } =
     useSWR<ApiList<OrderRow>>("/api/admin-proxy/orders?limit=100", swrJSON);
 
   /* -------- Products -------- */
@@ -116,7 +123,6 @@ export default function AdminDashboard() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
 
-  // helper request JSON
   async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
     const r = await fetch(url, {
       ...init,
@@ -142,7 +148,6 @@ export default function AdminDashboard() {
       if (!form.name.trim()) throw new Error("Nama produk wajib diisi");
       if (!Number.isFinite(form.price) || form.price <= 0) throw new Error("Harga harus > 0");
 
-      // Optimistic append
       const temp: ProductRow = {
         _id: `tmp-${Date.now()}`,
         name: form.name,
@@ -157,7 +162,6 @@ export default function AdminDashboard() {
 
       await mutateProducts(prev => ({ data: [ ...(prev?.data ?? []), temp ] }), { revalidate: false });
 
-      // ✅ create via /api/admin-proxy
       await requestJSON<ApiOne<ProductRow>>("/api/admin-proxy/products", {
         method: "POST",
         body: JSON.stringify({
@@ -170,11 +174,9 @@ export default function AdminDashboard() {
 
       setForm({ name: "", price: 0, description: "", category: "All" });
       setSuccessMsg("Produk berhasil dibuat");
-      // revalidate
       await mutateProducts();
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : "Gagal membuat produk");
-      // rollback optimistic (filter tmp)
       await mutateProducts(prev => ({ data: (prev?.data ?? []).filter(p => !p._id.startsWith("tmp-")) }), { revalidate: false });
     } finally {
       setBusy(false);
@@ -185,14 +187,13 @@ export default function AdminDashboard() {
     try {
       setBusy(true); setErrorMsg(null); setSuccessMsg(null);
 
-      // optimistic toggle
       await mutateProducts(prev => ({
         data: (prev?.data ?? []).map(x =>
           x._id === p._id ? { ...x, isActive: !x.isActive, updatedAt: new Date().toISOString() } : x
         ),
       }), { revalidate: false });
 
-      await requestJSON<ApiOne<ProductRow>>(`/api/admin-proxy/${encodeURIComponent(p._id)}`, {
+      await requestJSON<ApiOne<ProductRow>>(`/api/admin-proxy/products/${encodeURIComponent(p._id)}`, {
         method: "PATCH",
         body: JSON.stringify({ isActive: !p.isActive }),
       });
@@ -201,16 +202,12 @@ export default function AdminDashboard() {
       await mutateProducts();
     } catch (e) {
       setErrorMsg(e instanceof Error ? e.message : "Gagal mengubah status");
-      // rollback
       await mutateProducts();
     } finally {
       setBusy(false);
     }
   }
 
-  /* =========================
-     Memoized base arrays (fix exhaustive-deps)
-     ========================= */
   const orders = useMemo(
     () => (ordersResp?.data ?? EMPTY_ORDERS),
     [ordersResp?.data]
@@ -221,9 +218,6 @@ export default function AdminDashboard() {
     [productsResp?.data]
   );
 
-  /* =========================
-     Derivations
-     ========================= */
   const categories = useMemo(() => {
     const set = new Set<string>();
     products.forEach(p => { if (p.category) set.add(p.category); });
@@ -252,6 +246,22 @@ export default function AdminDashboard() {
         <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
         <p className="text-sm text-gray-500">Ringkasan penjualan, produk, dan statistik.</p>
       </header>
+
+      {/* 🐛 DEBUG SECTION */}
+      <section className="rounded-2xl border-2 border-blue-500 p-4 bg-blue-50">
+        <h3 className="font-bold text-blue-900 mb-2">🐛 Debug Info (Remove in production)</h3>
+        <div className="text-xs space-y-1 font-mono">
+          <div>Products Loading: {String(productsLoading)}</div>
+          <div>Products Error: {productsErr?.message || "none"}</div>
+          <div>Products Count: {products.length}</div>
+          <div>Products Data: {productsResp ? "exists" : "null"}</div>
+          <div className="mt-2">Orders Loading: {String(ordersLoading)}</div>
+          <div>Orders Error: {ordersErr?.message || "none"}</div>
+          <div>Orders Count: {orders.length}</div>
+          <div>Orders Data: {ordersResp ? "exists" : "null"}</div>
+          <div className="mt-2 text-yellow-800">Check browser console (F12) for detailed logs</div>
+        </div>
+      </section>
 
       {/* KPIs */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -319,6 +329,13 @@ export default function AdminDashboard() {
           </div>
         </div>
 
+        {productsErr && (
+          <div className="p-3 bg-red-50 text-red-700 rounded-lg">
+            <div>Error loading products: {productsErr.message}</div>
+            <div className="text-sm mt-1">Check browser console for details</div>
+          </div>
+        )}
+
         <div className="overflow-x-auto rounded-xl border">
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50">
@@ -333,10 +350,28 @@ export default function AdminDashboard() {
             </thead>
             <tbody>
               {productsLoading && (
-                <tr><td colSpan={6} className="p-4 text-center text-gray-500">Memuat...</td></tr>
+                <tr>
+                  <td colSpan={6} className="p-4 text-center text-gray-500">
+                    <div className="flex items-center justify-center gap-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+                      Memuat produk...
+                    </div>
+                  </td>
+                </tr>
               )}
-              {!productsLoading && filteredProducts.length === 0 && (
-                <tr><td colSpan={6} className="p-4 text-center text-gray-500">Tidak ada produk</td></tr>
+              {!productsLoading && productsErr && (
+                <tr>
+                  <td colSpan={6} className="p-4 text-center text-red-600">
+                    Gagal memuat produk: {productsErr.message}
+                  </td>
+                </tr>
+              )}
+              {!productsLoading && !productsErr && filteredProducts.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="p-4 text-center text-gray-500">
+                    {products.length === 0 ? "Tidak ada produk" : "Tidak ada produk dengan kategori ini"}
+                  </td>
+                </tr>
               )}
               {filteredProducts.map(p => (
                 <tr key={p._id} className="border-t">
@@ -434,10 +469,20 @@ export default function AdminDashboard() {
               </tr>
             </thead>
             <tbody>
-              {ordersErr && (
-                <tr><td colSpan={6} className="p-4 text-center text-red-600">Gagal memuat orders</td></tr>
+              {ordersLoading && (
+                <tr>
+                  <td colSpan={6} className="p-4 text-center text-gray-500">
+                    <div className="flex items-center justify-center gap-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+                      Memuat orders...
+                    </div>
+                  </td>
+                </tr>
               )}
-              {!ordersErr && orders.length === 0 && (
+              {ordersErr && (
+                <tr><td colSpan={6} className="p-4 text-center text-red-600">Gagal memuat orders: {ordersErr.message}</td></tr>
+              )}
+              {!ordersLoading && !ordersErr && orders.length === 0 && (
                 <tr><td colSpan={6} className="p-4 text-center text-gray-500">Belum ada data</td></tr>
               )}
               {orders.map(o => (
@@ -475,10 +520,11 @@ export default function AdminDashboard() {
 
       {/* Errors */}
       {(productsErr || statsErr) && (
-        <div className="p-3 rounded-xl bg-red-50 text-red-700">
-          {productsErr && <div>Gagal memuat produk.</div>}
-          {statsErr && <div>Gagal memuat statistik.</div>}
-        </div>
+        <section className="p-4 rounded-xl bg-red-50 text-red-700">
+          <h3 className="font-semibold mb-1">Error Summary</h3>
+          {productsErr && <div>Produk error: {productsErr.message}</div>}
+          {statsErr && <div>Statistik error: {statsErr.message}</div>}
+        </section>
       )}
     </div>
   );

@@ -1,82 +1,92 @@
 // pages/api/admin-proxy/[...slug].ts
 import type { NextApiRequest, NextApiResponse } from "next";
 
-/** Safely derive an error message from unknown */
+function headerToString(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[0] : v;
+}
+
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return "Unknown error";
-  }
-}
-
-/** Normalize header value (string | string[] | undefined) to string | undefined */
-function headerToString(v: string | string[] | undefined): string | undefined {
-  if (Array.isArray(v)) return v[0];
-  return v;
+  try { return JSON.stringify(err); } catch { return "Unknown error"; }
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const requestId = Date.now();
+
   const ADMIN_KEY = process.env.ADMIN_INVITE_KEY;
   if (!ADMIN_KEY) {
+    console.error(`❌ [${requestId}] ADMIN_INVITE_KEY is not set`);
     res.status(500).json({ error: "ADMIN_INVITE_KEY is not set" });
     return;
   }
 
-  // Build upstream base: explicit NEXT_PUBLIC_BASE_URL if provided, otherwise same origin.
-  const proto = headerToString(req.headers["x-forwarded-proto"]) ?? "http";
-  const host = headerToString(req.headers.host) ?? "localhost:3000";
-  const base = process.env.NEXT_PUBLIC_BASE_URL || `${proto}://${host}`;
+  // Base URL (dev/prod)
+  const fwdProto = headerToString(req.headers["x-forwarded-proto"]);
+  const fwdHost  = headerToString(req.headers["x-forwarded-host"]);
+  const host     = fwdHost ?? headerToString(req.headers.host) ?? "localhost:3000";
+  const proto    = fwdProto ?? (host.startsWith("localhost") ? "http" : "https");
+  const base     = process.env.NEXT_PUBLIC_BASE_URL || `${proto}://${host}`;
 
-  // Optional catch-all slug: [] when hitting /api/admin-proxy (no segments).
+  // Build path from catch-all slug
   const slugParam = req.query.slug;
-  const slugParts: string[] = Array.isArray(slugParam) ? slugParam : [];
+  const slugParts = Array.isArray(slugParam) ? slugParam : [];
   const path = slugParts.length ? `/${slugParts.join("/")}` : "";
 
-  // Reconstruct querystring (excluding "slug")
+  // Rebuild query string (exclude "slug")
   const qs = new URLSearchParams();
-  for (const [k, v] of Object.entries(req.query)) {
-    if (k === "slug") continue;
+  Object.entries(req.query).forEach(([k, v]) => {
+    if (k === "slug") return;
     if (Array.isArray(v)) v.forEach((vv) => qs.append(k, vv));
     else if (typeof v === "string") qs.append(k, v);
-  }
+  });
   const query = qs.size ? `?${qs.toString()}` : "";
 
-  // Final upstream URL
   const upstreamUrl = `${base}/api/admin${path}${query}`;
 
-  // Prepare body for non-GET/HEAD
+  // Prepare fetch options
   const method = req.method ?? "GET";
   const hasBody = !["GET", "HEAD"].includes(method);
+  const fetchHeaders: Record<string, string> = { "x-admin-key": ADMIN_KEY };
+  if (hasBody) fetchHeaders["content-type"] = "application/json";
+
   const body =
     hasBody
       ? (typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {}))
       : undefined;
 
-  // Minimal headers we need; include admin key
-  const headers: Record<string, string> = { "x-admin-key": ADMIN_KEY };
-  if (hasBody) headers["content-type"] = "application/json";
-
   try {
     const upstream = await fetch(upstreamUrl, {
       method,
-      headers,
+      headers: fetchHeaders,
       body,
       cache: "no-store",
     });
 
-    // Mirror status and stream response back
+    const contentType = upstream.headers.get("content-type") || "";
     res.status(upstream.status);
-    upstream.headers.forEach((value, key) => {
-      if (key.toLowerCase() === "transfer-encoding") return;
-      res.setHeader(key, value);
-    });
 
+    if (contentType.includes("application/json")) {
+      // Parse & re-send as clean JSON (jangan mirror content-encoding/length)
+      let payload: unknown;
+      try {
+        payload = await upstream.json();
+      } catch {
+        payload = { error: "Upstream returned invalid JSON" };
+      }
+      res.setHeader("content-type", "application/json; charset=utf-8");
+      res.setHeader("cache-control", "no-store");
+      res.json(payload);
+      return;
+    }
+
+    // Fallback non-JSON
     const buf = Buffer.from(await upstream.arrayBuffer());
+    if (contentType) res.setHeader("content-type", contentType);
+    res.setHeader("cache-control", "no-store");
     res.send(buf);
-  } catch (err: unknown) {
+  } catch (err) {
+    console.error(`  ❌ [${requestId}] Proxy error:`, err);
     res.status(502).json({ error: "Proxy error", message: getErrorMessage(err) });
   }
 }

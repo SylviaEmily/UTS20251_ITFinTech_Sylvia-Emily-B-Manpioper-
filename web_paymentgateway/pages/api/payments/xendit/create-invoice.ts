@@ -77,7 +77,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const payload: InvoiceReq = {
-      external_id: `ORDER-${order._id}`,
+      external_id: `order_${order._id}`,
       amount: total as number,
       currency: "IDR",
       description: `Payment for order ${order._id}`,
