@@ -52,48 +52,55 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<Success | Fail>
 ) {
+  // --- dukung preflight CORS jika perlu
+  if (req.method === "OPTIONS") {
+    res.setHeader("Allow", "GET, OPTIONS");
+    return res.status(204).end();
+  }
+
   if (req.method !== "GET") {
-    res.setHeader("Allow", "GET");
+    res.setHeader("Allow", "GET, OPTIONS");
     return res.status(405).json({ message: "Method not allowed" });
   }
 
+  // pastikan hanya admin
   if (!requireAdmin(req, res)) return;
 
   try {
     await dbConnect();
 
-    // --- filter status: waiting | paid | all
-    const qStatus = String(req.query.status ?? "all") as OrderStatusQuery;
+    // --- filter status: waiting | paid | all  (dengan normalisasi)
+    const rawStatus = String(req.query.status ?? "all").toLowerCase();
+    const qStatus: OrderStatusQuery =
+      rawStatus === "waiting" || rawStatus === "paid" ? rawStatus : "all";
+
     const match: Record<string, unknown> = {};
     if (qStatus === "waiting") match["payment.status"] = "PENDING";
     else if (qStatus === "paid") match["payment.status"] = "PAID";
 
     // --- limit aman 1..200
     const rawLimit = Number(req.query.limit ?? 100);
-    const limit = Number.isFinite(rawLimit)
-      ? Math.min(Math.max(Math.trunc(rawLimit), 1), 200)
-      : 100;
+    const limit =
+      Number.isFinite(rawLimit) && rawLimit > 0
+        ? Math.min(Math.trunc(rawLimit), 200)
+        : 100;
 
     // --- optional: cursor pagination (?cursor=<_id>), ambil dokumen "sebelum" cursor
-    const cursorParam =
-      typeof req.query.cursor === "string" ? req.query.cursor : null;
+    const cursorParam = typeof req.query.cursor === "string" ? req.query.cursor : null;
     if (cursorParam && isValidObjectId(cursorParam)) {
       match._id = { $lt: new Types.ObjectId(cursorParam) };
     }
 
     // --- ambil dokumen dengan projection secukupnya
-    const docs: OrderLeanDoc[] = await OrderModel.find(
-      match,
-      {
-        _id: 1,
-        "customer.userId": 1,
-        createdAt: 1,
-        updatedAt: 1,
-        items: 1,
-        amounts: 1,
-        payment: 1,
-      }
-    )
+    const docs: OrderLeanDoc[] = await OrderModel.find(match, {
+      _id: 1,
+      "customer.userId": 1,
+      createdAt: 1,
+      updatedAt: 1,
+      items: 1,
+      amounts: 1,
+      payment: 1,
+    })
       .sort({ _id: -1 }) // gunakan _id untuk pagination stabil
       .limit(limit + 1) // ambil 1 ekstra untuk lihat "hasMore"
       .lean<OrderLeanDoc[]>()
@@ -102,6 +109,7 @@ export default async function handler(
     const hasMore = docs.length > limit;
     const slice = hasMore ? docs.slice(0, limit) : docs;
 
+    // util konversi
     const toNumber = (v: unknown, fallback = 0): number => {
       if (typeof v === "number") return Number.isFinite(v) ? v : fallback;
       if (typeof v === "string") {
@@ -111,9 +119,7 @@ export default async function handler(
       return fallback;
     };
 
-    const toDate = (v: Date | string): Date => {
-      return v instanceof Date ? v : new Date(v);
-    };
+    const toDate = (v: Date | string): Date => (v instanceof Date ? v : new Date(v));
 
     const data: ApiOrderRow[] = slice.map((o): ApiOrderRow => {
       const itemsArr = Array.isArray(o.items) ? o.items : [];
@@ -126,7 +132,6 @@ export default async function handler(
           item.qty !== undefined ? item.qty : item.quantity,
           0
         );
-
         return { productId, name, price, quantity };
       });
 
@@ -147,7 +152,6 @@ export default async function handler(
 
     return res.status(200).json({ data, nextCursor });
   } catch (err: unknown) {
-    // tanpa 'any': lakukan narrowing aman
     const message =
       typeof err === "object" && err !== null && "message" in err
         ? String((err as { message?: unknown }).message ?? "Error fetching orders")

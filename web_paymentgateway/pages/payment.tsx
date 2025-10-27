@@ -56,15 +56,22 @@ function useOrderSubmit(subtotal: number, tax: number, total: number, items: Car
   const submit = async (formEl: HTMLFormElement | null): Promise<ApiOrderOk> => {
     const payload = buildPayload(formEl);
     const r = await fetch('/api/orders', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
 
     const text = await r.text();
     let parsed: unknown;
-    try { parsed = JSON.parse(text); } catch {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
       throw new Error(`Gagal parse JSON. Status ${r.status}. Body: ${text.slice(0, 120)}...`);
     }
-    if (!r.ok) { const err = parsed as ApiOrderErr | undefined; throw new Error(err?.message ?? `Gagal: HTTP ${r.status}`); }
+    if (!r.ok) {
+      const err = parsed as ApiOrderErr | undefined;
+      throw new Error(err?.message ?? `Gagal: HTTP ${r.status}`);
+    }
     return parsed as ApiOrderOk;
   };
 
@@ -79,10 +86,13 @@ export default function Payment() {
 
   const [status, setStatus] = useState<PayStatus>('idle');
 
-  async function handleConfirmPay() {
+  const handleSubmit: React.FormEventHandler<HTMLFormElement> = async (e) => {
+    e.preventDefault(); // cegah submit GET bawaan browser
+    if (status === 'processing' || items.length === 0) return;
+
     try {
       setStatus('processing');
-      const dto = await submit(formRef.current);
+      const dto = await submit(e.currentTarget);
 
       if (dto.status === 'FAILED' || dto.needsManualPayment) {
         setStatus('error');
@@ -91,14 +101,17 @@ export default function Payment() {
       }
 
       setStatus('success');
-      if (dto.invoiceUrl) window.location.href = dto.invoiceUrl;
-      else alert(`Order berhasil dibuat: ${dto.orderId}`);
-    } catch (e: unknown) {
+      if (dto.invoiceUrl) {
+        window.location.href = dto.invoiceUrl;
+      } else {
+        alert(`Order berhasil dibuat: ${dto.orderId}`);
+      }
+    } catch (err) {
       setStatus('error');
-      const msg = e instanceof Error ? e.message : 'Gagal membuat order/invoice';
+      const msg = err instanceof Error ? err.message : 'Gagal membuat order/invoice';
       alert(msg);
     }
-  }
+  };
 
   return (
     <main className="mx-auto max-w-7xl p-8">
@@ -156,19 +169,23 @@ export default function Payment() {
             <div className="flex justify-between text-base font-semibold"><span>Total</span><span>{formatRupiah(grand)}</span></div>
           </div>
 
-          <h4 className="mt-5 mb-2 text-sm font-semibold">Alamat Pengiriman</h4>
-          <form ref={formRef} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div><label className="label">Nama Penerima</label><input name="name" className="input" placeholder="John Doe" /></div>
-            <div><label className="label">Telepon</label><input name="phone" className="input" placeholder="08xxxxxxxxxx" /></div>
-            <div className="sm:col-span-2"><label className="label">Email</label><input name="email" className="input" placeholder="nama@email.com" /></div>
-            <div className="sm:col-span-2"><label className="label">Alamat</label><input name="address" className="input" placeholder="Jl. Contoh No. 123" /></div>
-            <div><label className="label">Kota</label><input name="city" className="input" placeholder="Jakarta" /></div>
-            <div><label className="label">Kode Pos</label><input name="postalCode" className="input" placeholder="12345" /></div>
-          </form>
+          {/* FORM */}
+          <form ref={formRef} onSubmit={handleSubmit} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div><label className="label">Nama Penerima</label><input name="name" className="input" placeholder="John Doe" required /></div>
+            <div><label className="label">Telepon</label><input name="phone" className="input" placeholder="08xxxxxxxxxx" required /></div>
+            <div className="sm:col-span-2"><label className="label">Email</label><input name="email" type="email" className="input" placeholder="nama@email.com" required /></div>
+            <div className="sm:col-span-2"><label className="label">Alamat</label><input name="address" className="input" placeholder="Jl. Contoh No. 123" required /></div>
+            <div><label className="label">Kota</label><input name="city" className="input" placeholder="Jakarta" required /></div>
+            <div><label className="label">Kode Pos</label><input name="postalCode" className="input" placeholder="12345" required /></div>
 
-          <button onClick={handleConfirmPay} className="mt-4 w-full rounded-xl bg-black py-3 text-white" disabled={status === 'processing' || items.length === 0}>
-            {status === 'processing' ? 'Processing…' : 'Confirm & Pay'}
-          </button>
+            <button
+              type="submit"
+              className="mt-2 w-full rounded-xl bg-black py-3 text-white sm:col-span-2"
+              disabled={status === 'processing' || items.length === 0}
+            >
+              {status === 'processing' ? 'Processing…' : 'Confirm & Pay'}
+            </button>
+          </form>
         </aside>
       </section>
     </main>
