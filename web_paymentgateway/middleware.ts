@@ -38,7 +38,7 @@ export function middleware(req: NextRequest) {
       if (decoded.role === "admin") {
         return NextResponse.redirect(new URL("/admin/dashboard", req.url));
       } else {
-        return NextResponse.redirect(new URL("/", req.url));
+        return NextResponse.redirect(new URL("/checkout", req.url));
       }
     } catch {
       // token invalid/expired → biarkan user lanjut ke /login /register
