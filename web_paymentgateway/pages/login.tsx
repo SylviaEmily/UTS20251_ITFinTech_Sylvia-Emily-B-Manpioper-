@@ -11,7 +11,6 @@ export default function LoginPage() {
   const [phone, setPhone] = useState("");
 
   const router = useRouter();
-  const from = (router.query.from as string) || "";
 
   // === STEP 1: Kirim email/phone + password untuk mendapatkan OTP ===
   const handleLogin = async (e: React.FormEvent) => {
@@ -61,14 +60,17 @@ export default function LoginPage() {
       if (res.ok) {
         setMessage("Login berhasil! 🎉");
 
-        // 👉 Cookie token sudah di-set oleh server. Terapkan logika redirect:
-        if (from) {
-          router.replace(from);
-        } else if (data.role === "admin") {
-          router.replace("/admin/dashboard");
-        } else {
-          router.replace("/checkout");
-        }
+        // Ambil 'from' yang TERKINI dari router.query.
+        // Gunakan hanya jika diawali '/' (menghindari open redirect).
+        const fromParam =
+          typeof router.query.from === "string" && router.query.from.startsWith("/")
+            ? router.query.from
+            : "";
+
+        // Prioritas: fromParam -> role admin -> checkout
+        const dest = fromParam || (data.role === "admin" ? "/admin/dashboard" : "/checkout");
+
+        router.replace(dest);
       } else {
         setMessage(data.message || "Verifikasi OTP gagal");
       }
