@@ -1,4 +1,4 @@
-// pages/admin/dashboard.tsx - WITH DEBUG INFO (fixed)
+// pages/admin/dashboard.tsx - CLEAN (no debug)
 import useSWR from "swr";
 import { useMemo, useState } from "react";
 import {
@@ -69,21 +69,15 @@ const getErrMsg = (body: unknown): string | null => {
 };
 
 const swrJSON = async <T,>(url: string): Promise<T> => {
-  console.log("🔵 Fetching:", url); // DEBUG
   const r = await fetch(url, { cache: "no-store" });
-  console.log("🔵 Response status:", r.status, r.statusText); // DEBUG
-  
   let body: unknown = null;
-  try { 
-    body = await r.json(); 
-    console.log("🔵 Response body:", body); // DEBUG
-  } catch (e) { 
-    console.error("❌ JSON parse error:", e); // DEBUG
+  try {
+    body = await r.json();
+  } catch {
+    // ignore JSON parse errors; handled by r.ok
   }
-  
   if (!r.ok) {
     const msg = getErrMsg(body) ?? `Request failed: ${r.status}`;
-    console.error("❌ Request failed:", msg, body); // DEBUG
     throw new Error(msg);
   }
   return body as T;
@@ -112,12 +106,14 @@ export default function AdminDashboard() {
   const { data: statsResp, error: statsErr } =
     useSWR<StatsResp>("/api/admin-proxy/stats", swrJSON);
 
-  const [form, setForm] = useState<{ name: string; price: number; description?: string; category: string }>({
-    name: "",
-    price: 0,
-    description: "",
-    category: "All",
-  });
+  const [form, setForm] = useState<{ name: string; price: number; description?: string; category: string }>(
+    {
+      name: "",
+      price: 0,
+      description: "",
+      category: "All",
+    }
+  );
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -246,22 +242,6 @@ export default function AdminDashboard() {
         <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
         <p className="text-sm text-gray-500">Ringkasan penjualan, produk, dan statistik.</p>
       </header>
-
-      {/* 🐛 DEBUG SECTION */}
-      <section className="rounded-2xl border-2 border-blue-500 p-4 bg-blue-50">
-        <h3 className="font-bold text-blue-900 mb-2">🐛 Debug Info (Remove in production)</h3>
-        <div className="text-xs space-y-1 font-mono">
-          <div>Products Loading: {String(productsLoading)}</div>
-          <div>Products Error: {productsErr?.message || "none"}</div>
-          <div>Products Count: {products.length}</div>
-          <div>Products Data: {productsResp ? "exists" : "null"}</div>
-          <div className="mt-2">Orders Loading: {String(ordersLoading)}</div>
-          <div>Orders Error: {ordersErr?.message || "none"}</div>
-          <div>Orders Count: {orders.length}</div>
-          <div>Orders Data: {ordersResp ? "exists" : "null"}</div>
-          <div className="mt-2 text-yellow-800">Check browser console (F12) for detailed logs</div>
-        </div>
-      </section>
 
       {/* KPIs */}
       <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
