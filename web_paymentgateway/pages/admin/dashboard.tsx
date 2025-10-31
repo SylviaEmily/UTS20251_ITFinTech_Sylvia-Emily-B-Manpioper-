@@ -1,4 +1,4 @@
-// pages/admin/dashboard.tsx - CLEAN (no debug)
+// pages/admin/dashboard.tsx - CLEAN (no debug) + Product form matches models + Orders no User column
 import useSWR from "swr";
 import { useMemo, useState } from "react";
 import {
@@ -20,7 +20,7 @@ type OrderItem = {
 
 type OrderRow = {
   _id: string;
-  userId: string;
+  userId: string; // masih ada di tipe, tapi tidak ditampilkan di tabel
   items: OrderItem[];
   totalAmount: number;
   paymentStatus: PaymentStatus;
@@ -28,14 +28,15 @@ type OrderRow = {
   updatedAt: string;
 };
 
+// Match models/product.ts (string defaults, category "All")
 export type ProductRow = {
   _id: string;
   name: string;
   price: number;
-  description?: string;
-  imageUrl?: string;
-  category?: string;
-  isActive: boolean;
+  description: string;  // default ''
+  imageUrl: string;     // default ''
+  category: string;     // default 'All'
+  isActive: boolean;    // default true
   createdAt: string;
   updatedAt: string;
 };
@@ -71,11 +72,7 @@ const getErrMsg = (body: unknown): string | null => {
 const swrJSON = async <T,>(url: string): Promise<T> => {
   const r = await fetch(url, { cache: "no-store" });
   let body: unknown = null;
-  try {
-    body = await r.json();
-  } catch {
-    // ignore JSON parse errors; handled by r.ok
-  }
+  try { body = await r.json(); } catch { /* ignore */ }
   if (!r.ok) {
     const msg = getErrMsg(body) ?? `Request failed: ${r.status}`;
     throw new Error(msg);
@@ -106,14 +103,20 @@ export default function AdminDashboard() {
   const { data: statsResp, error: statsErr } =
     useSWR<StatsResp>("/api/admin-proxy/stats", swrJSON);
 
-  const [form, setForm] = useState<{ name: string; price: number; description?: string; category: string }>(
-    {
-      name: "",
-      price: 0,
-      description: "",
-      category: "All",
-    }
-  );
+  const [form, setForm] = useState<{
+    name: string;
+    price: number;
+    description: string;
+    imageUrl: string;
+    category: string;
+  }>({
+    name: "",
+    price: 0,
+    description: "",
+    imageUrl: "",
+    category: "All",
+  });
+
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -141,19 +144,28 @@ export default function AdminDashboard() {
     try {
       setBusy(true); setErrorMsg(null); setSuccessMsg(null);
 
-      if (!form.name.trim()) throw new Error("Nama produk wajib diisi");
-      if (!Number.isFinite(form.price) || form.price <= 0) throw new Error("Harga harus > 0");
+      const name = form.name.trim();
+      const description = form.description.trim();
+      const imageUrl = form.imageUrl.trim();
+      const category = (form.category || "All").trim() || "All";
 
+      if (!name) throw new Error("Nama produk wajib diisi");
+      if (!Number.isFinite(form.price) || form.price <= 0) throw new Error("Harga harus > 0");
+      if (imageUrl && !/^https?:\/\/|^\//i.test(imageUrl)) {
+        throw new Error("Image URL harus URL absolut (http/https) atau path berawalan /");
+      }
+
+      // Optimistic row (mirror models defaults)
       const temp: ProductRow = {
         _id: `tmp-${Date.now()}`,
-        name: form.name,
+        name,
         price: form.price,
-        description: form.description || undefined,
-        category: form.category !== "All" ? form.category : undefined,
+        description,
+        imageUrl,
+        category,
         isActive: true,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        imageUrl: undefined,
       };
 
       await mutateProducts(prev => ({ data: [ ...(prev?.data ?? []), temp ] }), { revalidate: false });
@@ -161,14 +173,15 @@ export default function AdminDashboard() {
       await requestJSON<ApiOne<ProductRow>>("/api/admin-proxy/products", {
         method: "POST",
         body: JSON.stringify({
-          name: form.name,
+          name,
           price: form.price,
-          description: form.description || undefined,
-          category: form.category !== "All" ? form.category : undefined,
+          description,
+          imageUrl,
+          category,
         }),
       });
 
-      setForm({ name: "", price: 0, description: "", category: "All" });
+      setForm({ name: "", price: 0, description: "", imageUrl: "", category: "All" });
       setSuccessMsg("Produk berhasil dibuat");
       await mutateProducts();
     } catch (e) {
@@ -204,15 +217,8 @@ export default function AdminDashboard() {
     }
   }
 
-  const orders = useMemo(
-    () => (ordersResp?.data ?? EMPTY_ORDERS),
-    [ordersResp?.data]
-  );
-
-  const products = useMemo(
-    () => (productsResp?.data ?? EMPTY_PRODUCTS),
-    [productsResp?.data]
-  );
+  const orders = useMemo(() => (ordersResp?.data ?? EMPTY_ORDERS), [ordersResp?.data]);
+  const products = useMemo(() => (productsResp?.data ?? EMPTY_PRODUCTS), [productsResp?.data]);
 
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -225,13 +231,11 @@ export default function AdminDashboard() {
     return products.filter(p => (cat === "All" ? true : (p.category ?? "Uncategorized") === cat));
   }, [products, categoryFilter]);
 
-  const totalRevenue = useMemo(() => {
-    return orders.reduce((acc, o) => acc + (o.paymentStatus === "PAID" ? o.totalAmount : 0), 0);
-  }, [orders]);
-
-  const totalPaidOrders = useMemo(() => {
-    return orders.filter(o => o.paymentStatus === "PAID").length;
-  }, [orders]);
+  const totalRevenue = useMemo(
+    () => orders.reduce((acc, o) => acc + (o.paymentStatus === "PAID" ? o.totalAmount : 0), 0),
+    [orders]
+  );
+  const totalPaidOrders = useMemo(() => orders.filter(o => o.paymentStatus === "PAID").length, [orders]);
 
   const last7Daily = statsResp?.daily ?? EMPTY_DAILY;
   const last12Months = statsResp?.monthly ?? EMPTY_MONTHLY;
@@ -320,7 +324,7 @@ export default function AdminDashboard() {
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50">
               <tr>
-                <th className="text-left p-3">Nama</th>
+                <th className="text-left p-3">Produk</th>
                 <th className="text-left p-3">Kategori</th>
                 <th className="text-right p-3">Harga</th>
                 <th className="text-center p-3">Status</th>
@@ -355,8 +359,21 @@ export default function AdminDashboard() {
               )}
               {filteredProducts.map(p => (
                 <tr key={p._id} className="border-t">
-                  <td className="p-3">{p.name}</td>
-                  <td className="p-3">{p.category ?? "-"}</td>
+                  <td className="p-3">
+                    <div className="flex items-center gap-3">
+                      {p.imageUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={p.imageUrl} alt={p.name} className="h-10 w-10 rounded object-cover border" />
+                      ) : (
+                        <div className="h-10 w-10 rounded border flex items-center justify-center text-xs text-gray-400">—</div>
+                      )}
+                      <div>
+                        <div className="font-medium">{p.name}</div>
+                        {p.description ? <div className="text-xs text-gray-500 line-clamp-1">{p.description}</div> : null}
+                      </div>
+                    </div>
+                  </td>
+                  <td className="p-3">{p.category || "All"}</td>
                   <td className="p-3 text-right">{idr(p.price)}</td>
                   <td className="p-3 text-center">
                     <span className={`px-2 py-1 rounded-lg text-xs ${p.isActive ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-600"}`}>
@@ -384,7 +401,7 @@ export default function AdminDashboard() {
           <h3 className="font-semibold">Tambah Produk</h3>
           {errorMsg && <div className="text-sm text-red-600">{errorMsg}</div>}
           {successMsg && <div className="text-sm text-green-600">{successMsg}</div>}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
             <input
               className="border rounded-lg px-3 py-2"
               placeholder="Nama produk"
@@ -403,6 +420,12 @@ export default function AdminDashboard() {
               placeholder="Deskripsi (opsional)"
               value={form.description}
               onChange={(e) => setForm(v => ({ ...v, description: e.target.value }))}
+            />
+            <input
+              className="border rounded-lg px-3 py-2"
+              placeholder="Image URL (/images/xxx.jpg atau https://...)"
+              value={form.imageUrl}
+              onChange={(e) => setForm(v => ({ ...v, imageUrl: e.target.value }))}
             />
             <select
               className="border rounded-lg px-3 py-2"
@@ -424,7 +447,7 @@ export default function AdminDashboard() {
             </button>
             <button
               className="px-4 py-2 rounded-xl border disabled:opacity-50"
-              onClick={() => setForm({ name: "", price: 0, description: "", category: "All" })}
+              onClick={() => setForm({ name: "", price: 0, description: "", imageUrl: "", category: "All" })}
               disabled={busy}
             >
               Reset
@@ -433,7 +456,7 @@ export default function AdminDashboard() {
         </div>
       </section>
 
-      {/* Orders */}
+      {/* Orders - WITHOUT USER COLUMN */}
       <section className="space-y-4">
         <h2 className="font-semibold">Order Terbaru</h2>
         <div className="overflow-x-auto rounded-xl border">
@@ -441,7 +464,7 @@ export default function AdminDashboard() {
             <thead className="bg-gray-50">
               <tr>
                 <th className="text-left p-3">ID</th>
-                <th className="text-left p-3">User</th>
+                {/* kolom User dihapus */}
                 <th className="text-left p-3">Items</th>
                 <th className="text-right p-3">Total</th>
                 <th className="text-center p-3">Status</th>
@@ -451,7 +474,7 @@ export default function AdminDashboard() {
             <tbody>
               {ordersLoading && (
                 <tr>
-                  <td colSpan={6} className="p-4 text-center text-gray-500">
+                  <td colSpan={5} className="p-4 text-center text-gray-500">
                     <div className="flex items-center justify-center gap-2">
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
                       Memuat orders...
@@ -460,15 +483,15 @@ export default function AdminDashboard() {
                 </tr>
               )}
               {ordersErr && (
-                <tr><td colSpan={6} className="p-4 text-center text-red-600">Gagal memuat orders: {ordersErr.message}</td></tr>
+                <tr><td colSpan={5} className="p-4 text-center text-red-600">Gagal memuat orders: {ordersErr.message}</td></tr>
               )}
               {!ordersLoading && !ordersErr && orders.length === 0 && (
-                <tr><td colSpan={6} className="p-4 text-center text-gray-500">Belum ada data</td></tr>
+                <tr><td colSpan={5} className="p-4 text-center text-gray-500">Belum ada data</td></tr>
               )}
               {orders.map(o => (
                 <tr key={o._id} className="border-t">
                   <td className="p-3">{o._id}</td>
-                  <td className="p-3">{o.userId}</td>
+                  {/* <td className="p-3">{o.userId}</td>  -- removed from UI */}
                   <td className="p-3">
                     <div className="flex flex-col gap-1">
                       {o.items.map((it, idx) => (
